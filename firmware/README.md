@@ -47,6 +47,8 @@ firmware/
 
 ## 2. Hardware Pinout Reference
 
+> For complete point-to-point breadboard wiring and schematics, refer to [docs/wiring-diagram.md](../docs/wiring-diagram.md).
+
 | Function | ESP32 GPIO | Peripheral / Mode | Notes |
 | :--- | :---: | :--- | :--- |
 | **Blower Fan Gate** | `GPIO 25` | LEDC Ch 0, 25 kHz PWM | Drives gate of N-MOSFET (AO3400A / IRLZ44N) |

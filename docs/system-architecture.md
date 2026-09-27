@@ -6,6 +6,8 @@
 
 ## 1. Hardware & Electrical Architecture
 
+> See the full point-to-point pinout guide and schematic in [docs/wiring-diagram.md](wiring-diagram.md).
+
 The system is designed around a single **5V DC power bus** sourced via USB-C or micro-USB, allowing direct operation from standard USB wall chargers ($5\text{V }2.0\text{A}\text{--}3.0\text{A}$) and portable USB power banks/battery bricks.
 
 ```text
