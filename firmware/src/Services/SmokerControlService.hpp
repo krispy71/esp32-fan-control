@@ -31,7 +31,8 @@ public:
           pid_(target_setpoint_f, pid_config),
           lid_detector_(),
           is_fail_safe_(false),
-          status_("INITIALIZED") {}
+          status_("INITIALIZED"),
+          last_snapshot_{0, 0.0f, 0.0f, target_setpoint_f, 0.0f, 0.0f, 0.0f, false, false, false, "INITIALIZED"} {}
 
     [[nodiscard]] float setpoint() const noexcept { return setpoint_f_; }
     void setSetpoint(float deg_f) noexcept {
@@ -40,6 +41,16 @@ public:
     }
 
     [[nodiscard]] bool isFailSafe() const noexcept { return is_fail_safe_; }
+    [[nodiscard]] bool isLidOpen() const noexcept { return lid_detector_.isActive(); }
+    [[nodiscard]] const Ports::TelemetrySnapshot& lastTelemetry() const noexcept { return last_snapshot_; }
+
+    void triggerLidPause(uint32_t current_time_ms) noexcept {
+        lid_detector_.trigger(current_time_ms);
+    }
+
+    void cancelLidPause() noexcept {
+        lid_detector_.reset();
+    }
 
     Ports::TelemetrySnapshot executeCycle(uint32_t current_time_ms) noexcept {
         // 1. Read Sensors
@@ -68,6 +79,7 @@ public:
                 false,
                 status_
             };
+            last_snapshot_ = snapshot;
             if (telemetry_) {
                 telemetry_->publish(snapshot);
             }
@@ -98,6 +110,7 @@ public:
                 true,
                 status_
             };
+            last_snapshot_ = snapshot;
             if (telemetry_) {
                 telemetry_->publish(snapshot);
             }
@@ -126,6 +139,7 @@ public:
             false,
             status_
         };
+        last_snapshot_ = snapshot;
 
         if (telemetry_) {
             telemetry_->publish(snapshot);
@@ -145,6 +159,7 @@ private:
     Domain::LidOpenDetector lid_detector_;
     bool is_fail_safe_;
     const char* status_;
+    Ports::TelemetrySnapshot last_snapshot_;
 };
 
 } // namespace SmokerController::Services

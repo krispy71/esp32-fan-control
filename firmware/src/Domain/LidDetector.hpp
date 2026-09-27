@@ -29,6 +29,11 @@ public:
         head_ = 0;
     }
 
+    void trigger(uint32_t current_time_ms) noexcept {
+        is_active_ = true;
+        triggered_at_ms_ = current_time_ms;
+    }
+
     bool update(float current_temp, uint32_t current_time_ms) noexcept {
         // If active, check if pause duration has elapsed
         if (is_active_) {

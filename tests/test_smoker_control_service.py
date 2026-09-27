@@ -117,3 +117,34 @@ def test_service_lid_open_detection_closes_actuators() -> None:
     # Invariant: Lid open forces actuators to 0 to prevent flare-up
     assert damper.last_position_pct == 0.0
     assert blower.last_speed_pct == 0.0
+
+
+def test_service_manual_lid_pause_and_last_snapshot() -> None:
+    sensor = FakeSensor(pit_f=225.0)
+    damper = FakeDamper()
+    blower = FakeBlower()
+
+    service = SmokerControlService(
+        sensor_port=sensor,
+        damper_port=damper,
+        blower_port=blower,
+        target_setpoint_f=225.0,
+    )
+
+    assert service.last_snapshot is None
+    snap = service.execute_cycle(current_time_s=1.0)
+    assert service.last_snapshot == snap
+
+    # Manual pause
+    service.trigger_lid_pause(current_time_s=2.0)
+    assert service.is_lid_open is True
+    snap2 = service.execute_cycle(current_time_s=2.0)
+    assert snap2.lid_open is True
+    assert damper.last_position_pct == 0.0
+
+    # Manual cancel
+    service.cancel_lid_pause()
+    assert service.is_lid_open is False
+    snap3 = service.execute_cycle(current_time_s=3.0)
+    assert snap3.lid_open is False
+

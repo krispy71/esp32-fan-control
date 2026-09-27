@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 Smoker Controller</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="header">
+      <div class="header-brand">
+        <span class="brand-flame" aria-hidden="true">🔥</span>
+        <h1>Smoker Controller</h1>
+      </div>
+      <div class="header-status">
+        <span id="connection-badge" class="badge badge-online">Connected</span>
+        <span id="system-state" class="badge badge-state">INITIALIZING</span>
+      </div>
+    </header>
+
+    <!-- Main Temperature Display (Hero Cards) -->
+    <main class="dashboard-grid">
+      <!-- Chamber Pit Card -->
+      <section class="card pit-card" aria-labelledby="pit-heading">
+        <div class="card-header">
+          <h2 id="pit-heading">Smoke Chamber (Pit)</h2>
+          <span id="pit-status-dot" class="status-dot dot-ok" title="Sensor Healthy"></span>
+        </div>
+        <div class="temp-readout">
+          <span id="pit-temp" class="temp-large">---.-</span>
+          <span class="temp-unit">&deg;F</span>
+        </div>
+        <div class="card-footer-stats">
+          <div>Target: <strong id="current-setpoint">225.0&deg;F</strong></div>
+          <div>Delta: <strong id="pit-delta">--.-&deg;F</strong></div>
+        </div>
+      </section>
+
+      <!-- Meat Probe 1 Card -->
+      <section class="card food-card" aria-labelledby="food-heading">
+        <div class="card-header">
+          <h2 id="food-heading">Food Probe (Meat)</h2>
+          <span id="food-status-dot" class="status-dot dot-ok" title="Sensor Healthy"></span>
+        </div>
+        <div class="temp-readout">
+          <span id="meat-temp" class="temp-large">---.-</span>
+          <span class="temp-unit">&deg;F</span>
+        </div>
+        <div class="card-footer-stats">
+          <div>Status: <span id="meat-status">Monitoring</span></div>
+          <div>Target: <strong>203.0&deg;F</strong></div>
+        </div>
+      </section>
+
+      <!-- Dual-Actuator Status: Servo Damper & Blower Fan -->
+      <section class="card actuators-card" aria-labelledby="actuators-heading">
+        <div class="card-header">
+          <h2 id="actuators-heading">Airflow Modulation</h2>
+          <span id="airflow-mode-badge" class="badge badge-mode">Natural Draft</span>
+        </div>
+        <div class="actuators-grid">
+          <!-- Servo Damper Gauge -->
+          <div class="actuator-item">
+            <div class="actuator-title">
+              <span>Mechanical Damper</span>
+              <span id="damper-val" class="actuator-percent">0%</span>
+            </div>
+            <div class="progress-bar-bg" role="progressbar" id="damper-progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="damper-bar" class="progress-bar-fill fill-damper" style="width: 0%;"></div>
+            </div>
+            <div class="actuator-meta">
+              <span>0% Closed (Anti-Chimney)</span>
+              <span>100% Open</span>
+            </div>
+          </div>
+
+          <!-- Blower Fan Gauge -->
+          <div class="actuator-item">
+            <div class="actuator-title">
+              <span>12V/5V Blower Fan</span>
+              <span id="blower-val" class="actuator-percent">0%</span>
+            </div>
+            <div class="progress-bar-bg" role="progressbar" id="blower-progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="blower-bar" class="progress-bar-fill fill-blower" style="width: 0%;"></div>
+            </div>
+            <div class="actuator-meta">
+              <span>Threshold: 40%</span>
+              <span id="fan-rpm-status">OFF</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Control Panel: Setpoint & Quick Presets -->
+      <section class="card controls-card" aria-labelledby="controls-heading">
+        <div class="card-header">
+          <h2 id="controls-heading">Temperature Control</h2>
+        </div>
+        <form id="setpoint-form" class="controls-body" onsubmit="event.preventDefault(); submitSetpoint();">
+          <div class="slider-row">
+            <label for="setpoint-slider" class="sr-only">Target Temperature</label>
+            <input type="range" id="setpoint-slider" min="150" max="400" step="5" value="225" oninput="syncSliderToInput(this.value)">
+            <div class="input-with-button">
+              <input type="number" id="setpoint-input" min="150" max="400" step="1" value="225" oninput="syncInputToSlider(this.value)">
+              <span class="unit-label">&deg;F</span>
+              <button type="submit" class="btn btn-primary">Set</button>
+            </div>
+          </div>
+
+          <!-- Quick Cook Presets -->
+          <div class="quick-presets">
+            <button type="button" class="btn btn-preset" onclick="setPreset(225)">225&deg;F (Low & Slow)</button>
+            <button type="button" class="btn btn-preset" onclick="setPreset(250)">250&deg;F (Brisket/Pork)</button>
+            <button type="button" class="btn btn-preset" onclick="setPreset(275)">275&deg;F (Hot & Fast)</button>
+            <button type="button" class="btn btn-preset" onclick="setPreset(325)">325&deg;F (Poultry)</button>
+          </div>
+
+          <!-- Manual Lid / Safety Action -->
+          <div class="safety-actions">
+            <button type="button" id="lid-pause-btn" class="btn btn-warning" onclick="toggleLidPause()">
+              Pause for Lid Opening
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Real-Time Temperature History Chart -->
+      <section class="card chart-card" aria-labelledby="chart-heading">
+        <div class="card-header">
+          <h2 id="chart-heading">Temperature Trend History</h2>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-color legend-pit"></span> Pit Temp</span>
+            <span class="legend-item"><span class="legend-color legend-set"></span> Setpoint</span>
+            <span class="legend-item"><span class="legend-color legend-meat"></span> Meat Temp</span>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="trendChart" width="800" height="240"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>ESP32 Smoker Fan & Damper Controller v0.1.0</span>
+      <span id="footer-uptime">Uptime: 00:00:00</span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

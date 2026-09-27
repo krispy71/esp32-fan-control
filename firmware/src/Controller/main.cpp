@@ -10,6 +10,7 @@
 #include "../Adapters/Actuators/ESP32ServoDamperAdapter.hpp"
 #include "../Adapters/Sensors/MAX31855SensorAdapter.hpp"
 #include "../Adapters/Telemetry/SerialTelemetryAdapter.hpp"
+#include "../Adapters/Network/WebServerAdapter.hpp"
 #include "../Services/SmokerControlService.hpp"
 
 using namespace SmokerController;
@@ -36,6 +37,9 @@ static Services::SmokerControlService controlService(
     &telemetryAdapter,
     225.0f // Initial default setpoint: 225°F
 );
+
+// Web Server Adapter
+static Adapters::Network::WebServerAdapter webServerAdapter(controlService, 80);
 
 #ifdef ARDUINO
 
@@ -64,8 +68,9 @@ void setup() {
     blowerAdapter.begin();
     damperAdapter.begin();
     sensorAdapter.begin();
+    webServerAdapter.begin("SmokerController", "smoker123");
 
-    Serial.println("[Init] Hardware Adapters initialized successfully.");
+    Serial.println("[Init] Hardware and Network Adapters initialized successfully.");
     Serial.printf("[Init] Default target setpoint: %.1f F\n", controlService.setpoint());
 
     // Launch Deterministic Control Task on Core 1
@@ -83,9 +88,10 @@ void setup() {
 }
 
 void loop() {
-    // Core 0 loop: Housekeeping & Servo Idle-Detach check
+    // Core 0 loop: Housekeeping, Web Requests & Servo Idle-Detach check
+    webServerAdapter.update();
     damperAdapter.update(millis());
-    delay(50);
+    delay(10);
 }
 
 #else
@@ -93,6 +99,9 @@ void loop() {
 // Desktop simulation / native entry point
 int main() {
     std::cout << "ESP32 Smoker Controller — Native Host Build\n";
+    webServerAdapter.begin();
+    webServerAdapter.update();
+    std::cout << "Native Host initialization verified cleanly.\n";
     return 0;
 }
 

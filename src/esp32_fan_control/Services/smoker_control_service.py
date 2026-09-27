@@ -47,6 +47,7 @@ class SmokerControlService:
         self._last_meat_temp_f: float | None = None
         self._is_fail_safe: bool = False
         self._status_message: str = "INITIALIZED"
+        self._last_snapshot: TelemetrySnapshot | None = None
 
     @property
     def setpoint_f(self) -> float:
@@ -60,6 +61,22 @@ class SmokerControlService:
     @property
     def is_fail_safe(self) -> bool:
         return self._is_fail_safe
+
+    @property
+    def is_lid_open(self) -> bool:
+        return self._lid_detector.is_active
+
+    @property
+    def last_snapshot(self) -> TelemetrySnapshot | None:
+        return self._last_snapshot
+
+    def trigger_lid_pause(self, current_time_s: float) -> None:
+        """Manually trigger lid-open airflow pause."""
+        self._lid_detector.trigger(current_time_s)
+
+    def cancel_lid_pause(self) -> None:
+        """Manually cancel lid-open airflow pause and resume normal regulation."""
+        self._lid_detector.reset()
 
     def execute_cycle(self, current_time_s: float) -> TelemetrySnapshot:
         """Execute one complete sampling and regulation iteration."""
@@ -86,6 +103,7 @@ class SmokerControlService:
                 lid_open=False,
                 status=self._status_message,
             )
+            self._last_snapshot = snapshot
             if self._telemetry:
                 self._telemetry.publish(snapshot)
             return snapshot
@@ -113,6 +131,7 @@ class SmokerControlService:
                 lid_open=True,
                 status=self._status_message,
             )
+            self._last_snapshot = snapshot
             if self._telemetry:
                 self._telemetry.publish(snapshot)
             return snapshot
@@ -137,6 +156,7 @@ class SmokerControlService:
             lid_open=False,
             status=self._status_message,
         )
+        self._last_snapshot = snapshot
 
         if self._telemetry:
             self._telemetry.publish(snapshot)

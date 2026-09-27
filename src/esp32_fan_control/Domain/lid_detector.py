@@ -48,6 +48,11 @@ class LidOpenDetector:
         self._is_active = False
         self._triggered_at_s = None
 
+    def trigger(self, current_time_s: float) -> None:
+        """Manually trigger lid-open suppression window."""
+        self._is_active = True
+        self._triggered_at_s = current_time_s
+
     def update(self, current_temp: float, current_time_s: float) -> bool:
         """
         Process a new temperature reading and return True if lid is currently open.

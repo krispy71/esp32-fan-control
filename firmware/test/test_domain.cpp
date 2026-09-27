@@ -11,6 +11,7 @@
 #include "../src/Domain/PID.hpp"
 #include "../src/Domain/Temperature.hpp"
 #include "../src/Adapters/Sensors/MAX31855SensorAdapter.hpp"
+#include "../src/Adapters/Network/WebServerAdapter.hpp"
 #include "../src/Services/SmokerControlService.hpp"
 
 using namespace SmokerController;
@@ -177,6 +178,22 @@ static int testSmokerControlService() {
     auto s1 = service.executeCycle(1000);
     TEST_ASSERT(!service.isFailSafe(), "Service must not be fail-safe initially");
     TEST_ASSERT(s1.pit_temp_f == 225.0f, "Pit temp should match reading");
+    TEST_ASSERT(service.lastTelemetry().pit_temp_f == 225.0f, "lastTelemetry should match s1");
+
+    // Test setpoint update
+    service.setSetpoint(275.0f);
+    TEST_ASSERT(service.setpoint() == 275.0f, "setpoint should be updated to 275");
+
+    // Test manual lid pause trigger
+    service.triggerLidPause(1500);
+    TEST_ASSERT(service.isLidOpen(), "isLidOpen should be true after triggerLidPause");
+    auto s_lid = service.executeCycle(1500);
+    TEST_ASSERT(s_lid.lid_open, "Cycle should report lid_open true");
+    TEST_ASSERT(damper.position == 0.0f, "Damper must be closed during lid pause");
+    TEST_ASSERT(blower.speed == 0.0f, "Blower must be off during lid pause");
+
+    service.cancelLidPause();
+    TEST_ASSERT(!service.isLidOpen(), "isLidOpen should be false after cancelLidPause");
 
     // Simulate sensor disconnect
     sensor.reading = Domain::TemperatureReading::fromFahrenheit(
@@ -187,8 +204,35 @@ static int testSmokerControlService() {
     TEST_ASSERT(damper.position == 0.0f, "Fail-safe must close damper");
     TEST_ASSERT(blower.speed == 0.0f, "Fail-safe must shut blower");
     TEST_ASSERT(!s_fault.is_pit_valid, "Snapshot must record sensor failure");
+    TEST_ASSERT(!service.lastTelemetry().is_pit_valid, "lastTelemetry must reflect sensor fault");
 
     std::cout << "  [PASS] testSmokerControlService\n";
+    return 0;
+}
+
+static int testWebServerAdapter() {
+    MockSensor sensor;
+    MockDamper damper;
+    MockBlower blower;
+    sensor.reading = Domain::TemperatureReading::fromFahrenheit(225.0f, Domain::SensorRole::Pit, 1000);
+
+    Services::SmokerControlService service(sensor, damper, blower, nullptr, 225.0f);
+    service.executeCycle(1000);
+
+    Adapters::Network::WebServerAdapter web(service, 80);
+    web.begin();
+    web.update();
+
+    TEST_ASSERT(web.isInitialized(), "WebServerAdapter must be initialized after begin()");
+    TEST_ASSERT(web.port() == 80, "WebServerAdapter port must be 80");
+
+    char buf[512];
+    web.formatTelemetryJson(buf, sizeof(buf));
+    TEST_ASSERT(std::strstr(buf, "\"pit_temp_f\":225.0") != nullptr, "JSON must contain formatted pit_temp_f");
+    TEST_ASSERT(std::strstr(buf, "\"setpoint_f\":225.0") != nullptr, "JSON must contain formatted setpoint_f");
+    TEST_ASSERT(std::strstr(buf, "\"status\":\"REGULATING\"") != nullptr, "JSON must contain REGULATING status");
+
+    std::cout << "  [PASS] testWebServerAdapter\n";
     return 0;
 }
 
@@ -200,7 +244,8 @@ int main() {
     if (testLidDetector() != 0) return 1;
     if (testMAX31855Decoding() != 0) return 1;
     if (testSmokerControlService() != 0) return 1;
+    if (testWebServerAdapter() != 0) return 1;
 
-    std::cout << "\nALL 6 C++ TEST SUITES PASSED CLEANLY!\n";
+    std::cout << "\nALL 7 C++ TEST SUITES PASSED CLEANLY!\n";
     return 0;
 }
