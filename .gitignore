@@ -1,6 +1,7 @@
 # Build outputs & temporary CAD exports
 build/
 *.stl
+!cad/stl/*.stl
 *.obj
 .pio/
 .espressif/

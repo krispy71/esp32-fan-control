@@ -13,7 +13,7 @@
 
 /* [Render Part Selection] */
 // Which component to generate
-part = "all"; // [all: Assembled Preview, housing: Main Housing Body, rotor: Damper Rotor, output_adapter: Smoker Output Adapter, lid: Electronics Bay Lid, fan_cover: Blower Intake Grille]
+part = "all"; // [all: Assembled Preview, housing: Main Housing Body, rotor: Damper Rotor, output_adapter: Smoker Output Adapter, vision_pro_plate: Vision Pro Kamado Slide Plate, lid: Electronics Bay Lid, fan_cover: Blower Intake Grille]
 
 /* [Packaging Configuration] */
 // True = All-in-one integrated pod (houses ESP32 + 5V circuitry); False = Slim tethered pod (RJ45 port)
@@ -51,13 +51,39 @@ servo_flange_l = 32.5;
 servo_shaft_offset = 6.0;
 
 /* [Smoker Output Connection] */
-// Nozzle cross-section geometry
-output_shape = "round"; // [round: Cylindrical Pipe, rectangular: Rectangular Duct]
+// Preset smoker interface adapter
+output_preset = "bbq_guru"; // [bbq_guru: BBQ Guru Vision Pro / Pit Viper Port (1.25" / 31.5mm with O-Ring), custom_round: Custom Round Pipe, custom_rect: Custom Rectangular Duct, npt_1: 1" NPT Pipe (25.4mm), npt_1_5: 1.5" Pipe (38.1mm), kamado_rect: Kamado Slide Door]
 
-// Round output outer diameter (mm) (e.g. 25.4 for 1" NPT, 31.75 for 1.25", 38.1 for 1.5")
-output_round_od = 25.4;
+// Nozzle cross-section geometry (derived from preset or manual)
+output_shape = (output_preset == "custom_rect" || output_preset == "kamado_rect") ? "rectangular" : "round";
+
+// Round output outer diameter (mm)
+// Note: 31.5mm is sized with 0.25mm printing tolerance to slip snugly into BBQ Guru 31.8mm (1-1/4") receiver ports
+output_round_od = (output_preset == "bbq_guru") ? 31.5 :
+                  (output_preset == "npt_1") ? 25.4 :
+                  (output_preset == "npt_1_5") ? 38.1 : 31.5;
+
 // Round output wall thickness (mm)
 output_round_wall = 2.5;
+
+// Insertion nozzle length extending into smoker vent / adapter tube (mm)
+output_nozzle_len = (output_preset == "bbq_guru") ? 32.0 : 35.0;
+
+// Enable O-Ring friction seal groove on cylindrical nozzle (standard for BBQ Guru Pit Viper fit)
+include_oring_groove = (output_preset == "bbq_guru");
+// O-ring groove distance from nozzle tip (mm)
+oring_offset_from_tip = 10.0;
+// O-ring groove width (mm) (2.8mm accommodates standard 3/32" / 2.5mm cross-section O-rings)
+oring_groove_width = 2.8;
+// O-ring groove depth (mm) (1.4mm depth leaves 28.7mm root OD for standard Dash-121 / Dash-122 silicone O-rings)
+oring_groove_depth = 1.4;
+
+// Enable stop shoulder collar at base of nozzle (rests flush against BBQ Guru adapter face)
+include_stop_collar = (output_preset == "bbq_guru");
+// Stop collar outer diameter (mm)
+stop_collar_d = 38.0;
+// Stop collar thickness (mm)
+stop_collar_t = 3.0;
 
 // Rectangular output outer width (mm) (e.g. 50 for Kamado bottom slide vent)
 output_rect_w = 50;
@@ -66,11 +92,8 @@ output_rect_h = 30;
 // Rectangular output wall thickness (mm)
 output_rect_wall = 2.5;
 
-// Insertion nozzle length extending into smoker vent (mm)
-output_nozzle_len = 35;
-
-// Enable mounting flange plate
-include_flange = true;
+// Enable mounting flange plate (with bolt holes for custom smoker mounting)
+include_flange = (output_preset != "bbq_guru");
 // Flange plate outer width (mm)
 flange_w = 70;
 // Flange plate outer height (mm)
@@ -83,6 +106,22 @@ flange_hole_d = 4.2;
 flange_hole_spacing_x = 55;
 // Flange hole vertical center-to-center spacing (mm)
 flange_hole_spacing_y = 40;
+
+/* [Vision Pro S-Series Slide Plate (Drop-in Replacement)] */
+// Width of Vision Kamado Pro S-Series draft track (mm)
+vision_plate_w = 82.0;
+// Height of Vision Kamado Pro S-Series draft door (mm)
+vision_plate_h = 74.0;
+// Plate thickness (mm)
+vision_plate_t = 2.5;
+// Ceramic kamado body radius of curvature (mm)
+vision_kamado_r = 195.0;
+// Female blower receiver port inner diameter (mm) (matches BBQ Guru 31.8mm / 1-1/4")
+vision_port_id = 31.8;
+// Female blower receiver port outer diameter (mm)
+vision_port_od = 36.8;
+// Female receiver port depth (mm)
+vision_port_len = 25.0;
 
 /* [Integrated Electronics Bay (Config A)] */
 // Electronics bay interior width (mm) (fits ESP32 + MAX31855 + MOSFET PCB)
@@ -285,6 +324,9 @@ module damper_rotor() {
 // 3. SMOKER OUTPUT ADAPTER (MODULAR BOLT-ON NOZZLE)
 // ====================================================================
 module output_adapter() {
+    cx = (damper_d + 16)/2;
+    cy = (fan_depth + wall)/2;
+
     difference() {
         union() {
             // Adapter base mounting plate (attaches to housing boss)
@@ -293,11 +335,17 @@ module output_adapter() {
 
             // Transition nozzle geometry
             if (output_shape == "round") {
+                // Optional mechanical stop collar (seats flush against BBQ Guru adapter face)
+                if (include_stop_collar) {
+                    translate([cx, cy, flange_t])
+                        cylinder(d=stop_collar_d, h=stop_collar_t);
+                }
+
                 // Cylindrical pipe nozzle
-                translate([(damper_d + 16)/2, (fan_depth + wall)/2, flange_t])
+                translate([cx, cy, flange_t])
                     cylinder(d=output_round_od, h=output_nozzle_len);
                 
-                // Optional smoker mounting flange
+                // Optional bolt flange
                 if (include_flange) {
                     translate([(damper_d + 16 - flange_w)/2, (fan_depth + wall - flange_h)/2, flange_t + 10])
                         rounded_box([flange_w, flange_h, flange_t], 4);
@@ -318,8 +366,23 @@ module output_adapter() {
         // Central airflow bore through adapter plate and nozzle
         if (output_shape == "round") {
             inner_d = output_round_od - 2*output_round_wall;
-            translate([(damper_d + 16)/2, (fan_depth + wall)/2, -1])
+            translate([cx, cy, -1])
                 cylinder(d=inner_d, h=output_nozzle_len + flange_t + 5);
+
+            // Tip lead-in chamfer for easy alignment into BBQ Guru port
+            translate([cx, cy, flange_t + output_nozzle_len - 1.5])
+                cylinder(d1=inner_d, d2=output_round_od + 0.5, h=1.6);
+
+            // O-Ring retention groove cutout (standard BBQ Guru Pit Viper friction seal)
+            if (include_oring_groove) {
+                groove_z = flange_t + output_nozzle_len - oring_offset_from_tip;
+                translate([cx, cy, groove_z])
+                    difference() {
+                        cylinder(d=output_round_od + 2, h=oring_groove_width);
+                        translate([0, 0, -1])
+                            cylinder(d=output_round_od - 2*oring_groove_depth, h=oring_groove_width + 2);
+                    }
+            }
         } else {
             inner_w = output_rect_w - 2*output_rect_wall;
             inner_h = output_rect_h - 2*output_rect_wall;
@@ -328,20 +391,58 @@ module output_adapter() {
         }
 
         // 4x M3 mounting screw holes into housing
-        translate([(damper_d + 16)/2 - 14, (fan_depth + wall)/2 - 8, -1]) cylinder(d=3.4, h=flange_t + 2);
-        translate([(damper_d + 16)/2 + 14, (fan_depth + wall)/2 - 8, -1]) cylinder(d=3.4, h=flange_t + 2);
-        translate([(damper_d + 16)/2 - 14, (fan_depth + wall)/2 + 8, -1]) cylinder(d=3.4, h=flange_t + 2);
-        translate([(damper_d + 16)/2 + 14, (fan_depth + wall)/2 + 8, -1]) cylinder(d=3.4, h=flange_t + 2);
+        translate([cx - 14, cy - 8, -1]) cylinder(d=3.4, h=flange_t + 2);
+        translate([cx + 14, cy - 8, -1]) cylinder(d=3.4, h=flange_t + 2);
+        translate([cx - 14, cy + 8, -1]) cylinder(d=3.4, h=flange_t + 2);
+        translate([cx + 14, cy + 8, -1]) cylinder(d=3.4, h=flange_t + 2);
 
         // Flange mounting screw holes (for smoker attachment bolts)
         if (include_flange) {
-            cx = (damper_d + 16)/2;
-            cy = (fan_depth + wall)/2;
             translate([cx - flange_hole_spacing_x/2, cy - flange_hole_spacing_y/2, -1]) cylinder(d=flange_hole_d, h=100);
             translate([cx + flange_hole_spacing_x/2, cy - flange_hole_spacing_y/2, -1]) cylinder(d=flange_hole_d, h=100);
             translate([cx - flange_hole_spacing_x/2, cy + flange_hole_spacing_y/2, -1]) cylinder(d=flange_hole_d, h=100);
             translate([cx + flange_hole_spacing_x/2, cy + flange_hole_spacing_y/2, -1]) cylinder(d=flange_hole_d, h=100);
         }
+    }
+}
+
+// ====================================================================
+// 4. VISION PRO S-SERIES SLIDE DOOR REPLACEMENT PLATE
+// ====================================================================
+// Standalone 3D printable slide door for Vision Kamado Pro S-Series grills.
+// Drops directly into the existing bottom draft door track, featuring a
+// standardized BBQ Guru 31.8mm (1-1/4") female receiver port.
+module vision_pro_slide_plate() {
+    plate_angle = (vision_plate_w / (2 * 3.14159265 * vision_kamado_r)) * 360;
+
+    difference() {
+        union() {
+            // Clean 2-manifold curved cylindrical shell
+            rotate([0, 0, -plate_angle/2])
+            rotate_extrude(angle=plate_angle)
+                translate([vision_kamado_r, -vision_plate_h/2])
+                square([vision_plate_t, vision_plate_h]);
+
+            // Central female blower receiver port (BBQ Guru standard tube)
+            // Embedded 2mm into plate for clean manifold union
+            translate([vision_kamado_r - 2, 0, 0])
+                rotate([0, 90, 0])
+                cylinder(d=vision_port_od, h=vision_port_len + 2);
+
+            // Pull handle / slide tab on edge for easy insertion/removal
+            rotate([0, 0, -plate_angle/2 + 2])
+            translate([vision_kamado_r - 1, -4, -vision_plate_h/4])
+                cube([8, 8, vision_plate_h/2]);
+        }
+
+        // Central airflow opening through receiver port into firebox
+        translate([vision_kamado_r - 10, 0, 0])
+            rotate([0, 90, 0])
+            cylinder(d=vision_port_id, h=vision_port_len + 20);
+
+        // Kill plug keeper hole (3.5mm hole for lanyard/silicone tether)
+        translate([vision_kamado_r + vision_plate_t + vision_port_len - 5, 0, vision_port_od/2 - 2])
+            cylinder(d=3.5, h=10, center=true);
     }
 }
 
@@ -429,6 +530,8 @@ if (part == "all") {
     damper_rotor();
 } else if (part == "output_adapter") {
     output_adapter();
+} else if (part == "vision_pro_plate") {
+    vision_pro_slide_plate();
 } else if (part == "lid") {
     electronics_lid();
 } else if (part == "fan_cover") {
