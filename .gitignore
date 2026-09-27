@@ -1,0 +1,23 @@
+# Build outputs & temporary CAD exports
+build/
+*.stl
+*.obj
+.pio/
+.espressif/
+
+# Python & environments
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Testing & caches
+.pytest_cache/
+.coverage
+
+# IDE & OS files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
