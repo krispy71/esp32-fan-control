@@ -1,0 +1,40 @@
+"""Unit tests for discrete PID regulator."""
+
+import pytest
+from esp32_fan_control.Domain.pid import PIDConfig, PIDRegulator
+
+
+def test_pid_proportional_response() -> None:
+    config = PIDConfig(kp=2.0, ki=0.0, kd=0.0, output_min=0.0, output_max=100.0)
+    pid = PIDRegulator(target_setpoint=225.0, config=config)
+
+    # 10 degrees below setpoint -> 10 * 2.0 = 20% demand
+    demand = pid.compute(current_temp=215.0, current_time_s=1.0)
+    assert demand.value_pct == 20.0
+
+    # Over temperature -> 0% demand (clamped)
+    demand_over = pid.compute(current_temp=235.0, current_time_s=2.0)
+    assert demand_over.value_pct == 0.0
+
+
+def test_pid_anti_windup_clamping() -> None:
+    config = PIDConfig(kp=1.0, ki=0.5, kd=0.0, integral_min=0.0, integral_max=50.0)
+    pid = PIDRegulator(target_setpoint=225.0, config=config)
+
+    # Cold pit for a long time (100 seconds) with 25° error
+    pid.compute(current_temp=200.0, current_time_s=0.0)
+    demand = pid.compute(current_temp=200.0, current_time_s=100.0)
+
+    # Integral should be clamped at 50.0 rather than winding up to 2500
+    assert pid.integral == 50.0
+    assert demand.value_pct <= 100.0
+
+
+def test_pid_reset() -> None:
+    pid = PIDRegulator(target_setpoint=225.0)
+    pid.compute(current_temp=200.0, current_time_s=1.0)
+    pid.compute(current_temp=200.0, current_time_s=2.0)
+    assert pid.integral > 0.0
+
+    pid.reset()
+    assert pid.integral == 0.0
