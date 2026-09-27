@@ -175,7 +175,10 @@ public:
             "\"is_pit_valid\":%s,"
             "\"is_meat_valid\":%s,"
             "\"lid_open\":%s,"
-            "\"status\":\"%s\"}",
+            "\"status\":\"%s\","
+            "\"is_meat_wireless\":%s,"
+            "\"meat_battery_pct\":%d,"
+            "\"meat_probe_name\":\"%s\"}",
             snap.timestamp_ms,
             snap.pit_temp_f,
             snap.meat_temp_f,
@@ -186,7 +189,10 @@ public:
             snap.is_pit_valid ? "true" : "false",
             snap.is_meat_valid ? "true" : "false",
             snap.lid_open ? "true" : "false",
-            snap.status ? snap.status : "OK"
+            snap.status ? snap.status : "OK",
+            snap.is_meat_wireless ? "true" : "false",
+            static_cast<int>(snap.meat_battery_pct),
+            snap.meat_probe_name ? snap.meat_probe_name : ""
         );
     }
 

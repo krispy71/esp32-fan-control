@@ -72,6 +72,9 @@ class WebServerAdapter:
                 "is_meat_valid": snap.meat_temp_f is not None,
                 "lid_open": snap.lid_open,
                 "status": snap.status,
+                "is_meat_wireless": snap.is_meat_wireless,
+                "meat_battery_pct": snap.meat_battery_pct,
+                "meat_probe_name": snap.meat_probe_name,
             }
         return {
             "timestamp_s": time.time(),
@@ -86,6 +89,9 @@ class WebServerAdapter:
             "is_meat_valid": False,
             "lid_open": self._service.is_lid_open,
             "status": "INITIALIZING",
+            "is_meat_wireless": False,
+            "meat_battery_pct": None,
+            "meat_probe_name": "",
         }
 
     def _create_handler_class(self):

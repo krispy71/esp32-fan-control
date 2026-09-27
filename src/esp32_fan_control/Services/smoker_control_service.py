@@ -175,6 +175,9 @@ class SmokerControlService:
                 demand_pct=0.0,
                 lid_open=False,
                 status=self._status_message,
+                is_meat_wireless=meat_reading.is_wireless,
+                meat_battery_pct=meat_reading.battery_pct,
+                meat_probe_name=meat_reading.probe_name,
             )
             self._last_snapshot = snapshot
             if self._telemetry:
@@ -203,6 +206,9 @@ class SmokerControlService:
                 demand_pct=0.0,
                 lid_open=True,
                 status=self._status_message,
+                is_meat_wireless=meat_reading.is_wireless,
+                meat_battery_pct=meat_reading.battery_pct,
+                meat_probe_name=meat_reading.probe_name,
             )
             self._last_snapshot = snapshot
             if self._telemetry:
@@ -228,6 +234,9 @@ class SmokerControlService:
             demand_pct=demand.value_pct,
             lid_open=False,
             status=self._status_message,
+            is_meat_wireless=meat_reading.is_wireless,
+            meat_battery_pct=meat_reading.battery_pct,
+            meat_probe_name=meat_reading.probe_name,
         )
         self._last_snapshot = snapshot
 

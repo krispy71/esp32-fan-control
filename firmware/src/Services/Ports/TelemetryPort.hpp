@@ -16,6 +16,9 @@ struct TelemetrySnapshot {
     bool is_meat_valid;
     bool lid_open;
     const char* status;
+    bool is_meat_wireless{false};
+    int8_t meat_battery_pct{-1};
+    const char* meat_probe_name{""};
 };
 
 class ITelemetryPublisherPort {

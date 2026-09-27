@@ -11,6 +11,8 @@
 #include "../src/Domain/PID.hpp"
 #include "../src/Domain/Temperature.hpp"
 #include "../src/Adapters/Sensors/MAX31855SensorAdapter.hpp"
+#include "../src/Adapters/Sensors/BLEProbeAdapter.hpp"
+#include "../src/Adapters/Sensors/CompositeSensorAdapter.hpp"
 #include "../src/Adapters/Network/WebServerAdapter.hpp"
 #include "../src/Adapters/Storage/ESP32NVSConfigAdapter.hpp"
 #include "../src/Services/SmokerControlService.hpp"
@@ -288,6 +290,158 @@ static int testConfigStorage() {
     return 0;
 }
 
+static int testBLEDecoder() {
+    Domain::BLEProbeReading reading{};
+
+    // 1. BTHome v2: 25.00°C (0x09C4), 88% battery
+    const uint8_t bthome_payload[] = {0x40, 0x02, 0xC4, 0x09, 0x01, 0x58};
+    TEST_ASSERT(
+        Domain::BLEAdvertisementDecoder::decodeBTHomeV2(bthome_payload, sizeof(bthome_payload), reading),
+        "BTHome v2 decode must succeed"
+    );
+    TEST_ASSERT(std::abs(reading.internal_temp_c - 25.0f) < 0.01f, "BTHome temp must be 25.0C");
+    TEST_ASSERT(reading.battery_pct == 88, "BTHome battery must be 88%");
+    TEST_ASSERT(reading.protocol == Domain::BLEProbeProtocol::BTHome, "Protocol must be BTHome");
+
+    // 2. Inkbird: 55.4°C (0x022A = 554), 95% battery
+    const uint8_t inkbird_payload[] = {0x00, 0x00, 0x2A, 0x02, 0x5F};
+    reading = Domain::BLEProbeReading{};
+    TEST_ASSERT(
+        Domain::BLEAdvertisementDecoder::decodeInkbird(inkbird_payload, sizeof(inkbird_payload), reading),
+        "Inkbird decode must succeed"
+    );
+    TEST_ASSERT(std::abs(reading.internal_temp_c - 55.4f) < 0.01f, "Inkbird temp must be 55.4C");
+    TEST_ASSERT(reading.battery_pct == 95, "Inkbird battery must be 95%");
+    TEST_ASSERT(reading.protocol == Domain::BLEProbeProtocol::Inkbird, "Protocol must be Inkbird");
+
+    // 3. MEATER: tip 55.0°C (0x0226 = 550), ambient 110.0°C (0x044C = 1100), 90% battery
+    const uint8_t meater_payload[] = {0x00, 0x00, 0x02, 0x26, 0x04, 0x4C, 0x5A};
+    reading = Domain::BLEProbeReading{};
+    TEST_ASSERT(
+        Domain::BLEAdvertisementDecoder::decodeMeater(meater_payload, sizeof(meater_payload), reading),
+        "MEATER decode must succeed"
+    );
+    TEST_ASSERT(std::abs(reading.internal_temp_c - 55.0f) < 0.01f, "MEATER tip temp must be 55.0C");
+    TEST_ASSERT(std::abs(reading.ambient_temp_c - 110.0f) < 0.01f, "MEATER ambient temp must be 110.0C");
+    TEST_ASSERT(reading.has_ambient, "MEATER must report ambient");
+    TEST_ASSERT(reading.battery_pct == 90, "MEATER battery must be 90%");
+    TEST_ASSERT(reading.protocol == Domain::BLEProbeProtocol::Meater, "Protocol must be Meater");
+
+    // 4. SIG Environmental: 21.50°C (0x0866 = 2150)
+    const uint8_t sig_payload[] = {0x66, 0x08};
+    reading = Domain::BLEProbeReading{};
+    TEST_ASSERT(
+        Domain::BLEAdvertisementDecoder::decodeSigEnvironmental(sig_payload, sizeof(sig_payload), reading),
+        "SIG Environmental decode must succeed"
+    );
+    TEST_ASSERT(std::abs(reading.internal_temp_c - 21.5f) < 0.01f, "SIG temp must be 21.5C");
+    TEST_ASSERT(reading.protocol == Domain::BLEProbeProtocol::SigEnvironmental, "Protocol must be SIG");
+
+    // 5. decodeAny auto-detection
+    reading = Domain::BLEProbeReading{};
+    TEST_ASSERT(
+        Domain::BLEAdvertisementDecoder::decodeAny(bthome_payload, sizeof(bthome_payload), reading),
+        "decodeAny must recognize BTHome"
+    );
+    TEST_ASSERT(reading.protocol == Domain::BLEProbeProtocol::BTHome, "Auto-detected protocol must be BTHome");
+
+    std::cout << "  [PASS] testBLEDecoder\n";
+    return 0;
+}
+
+static int testBLEProbeAdapter() {
+    Adapters::Sensors::BLEProbeAdapter ble(30000);
+    ble.begin();
+
+    // Prior to packet arrival
+    TEST_ASSERT(!ble.isConnected(1000), "Should not be connected before any packet");
+    auto r_initial = ble.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(!r_initial.isValid(), "Initial reading must not be valid");
+
+    // Simulate receiving MEATER packet
+    const uint8_t meater_payload[] = {0x00, 0x00, 0x02, 0x26, 0x04, 0x4C, 0x5A};
+    bool processed = ble.processAdvertisement(meater_payload, sizeof(meater_payload), "AA:BB:CC:DD:EE:FF", 5000);
+    TEST_ASSERT(processed, "Process advertisement must succeed");
+    TEST_ASSERT(ble.isConnected(6000), "Should be connected within timeout window");
+
+    // Read Food1 (tip) and Food2 (ambient)
+    auto r_food1 = ble.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(r_food1.isValid(), "Food1 reading must be valid");
+    TEST_ASSERT(std::abs(r_food1.celsius - 55.0f) < 0.01f, "Food1 must be 55.0C");
+    TEST_ASSERT(r_food1.is_wireless, "Food1 must be marked wireless");
+    TEST_ASSERT(r_food1.battery_pct == 90, "Battery should be 90%");
+    TEST_ASSERT(std::strcmp(r_food1.probe_name, "MEATER Probe") == 0, "Probe name should be MEATER Probe");
+
+    auto r_food2 = ble.readTemperature(Domain::SensorRole::Food2);
+    TEST_ASSERT(r_food2.isValid(), "Food2 reading must be valid");
+    TEST_ASSERT(std::abs(r_food2.celsius - 110.0f) < 0.01f, "Food2 ambient must be 110.0C");
+
+    // Test staleness timeout (last packet at 5000, now at 40000 -> 35s > 30s timeout)
+    ble.setMockTime(40000);
+    TEST_ASSERT(!ble.isConnected(40000), "Must be disconnected after staleness timeout");
+    auto r_stale = ble.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(!r_stale.isValid(), "Stale reading must not be valid");
+    TEST_ASSERT(r_stale.fault == Domain::SensorFault::Stale, "Fault must be Stale");
+
+    // Test MAC filtering
+    ble.setTargetMac("11:22:33:44:55:66");
+    TEST_ASSERT(std::strcmp(ble.targetMac(), "11:22:33:44:55:66") == 0, "Target MAC should match");
+    bool filtered = ble.processAdvertisement(meater_payload, sizeof(meater_payload), "AA:BB:CC:DD:EE:FF", 41000);
+    TEST_ASSERT(!filtered, "Advertisement with different MAC must be rejected");
+
+    bool matched = ble.processAdvertisement(meater_payload, sizeof(meater_payload), "11:22:33:44:55:66", 42000);
+    TEST_ASSERT(matched, "Advertisement with matching MAC must be accepted");
+
+    std::cout << "  [PASS] testBLEProbeAdapter\n";
+    return 0;
+}
+
+static int testCompositeSensor() {
+    MockSensor wired;
+    Adapters::Sensors::BLEProbeAdapter ble(30000);
+    Adapters::Sensors::CompositeSensorAdapter composite(wired, &ble);
+
+    // Wired setup: Pit = 225°F, Food1 = 70°F
+    wired.reading = Domain::TemperatureReading::fromFahrenheit(225.0f, Domain::SensorRole::Pit, 1000);
+
+    // Pit is always wired
+    auto pit_r = composite.readTemperature(Domain::SensorRole::Pit);
+    TEST_ASSERT(pit_r.isValid(), "Pit reading must be valid");
+    TEST_ASSERT(std::abs(pit_r.fahrenheit() - 225.0f) < 0.1f, "Pit must return wired reading 225F");
+    TEST_ASSERT(!pit_r.is_wireless, "Pit must not be marked wireless");
+
+    // BLE is not yet connected: Food1 falls back to wired
+    auto food_wired = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(food_wired.isValid(), "Food1 should fallback to wired sensor");
+    TEST_ASSERT(!food_wired.is_wireless, "Fallback should not be wireless");
+
+    // BLE receives wireless probe packet (tip = 57.2°C = 135.0°F)
+    // 57.2°C = 572 raw in Inkbird format (0x023C = 572)
+    const uint8_t inkbird_meat[] = {0x00, 0x00, 0x3C, 0x02, 0x55};
+    ble.processAdvertisement(inkbird_meat, sizeof(inkbird_meat), "AA:BB:CC:DD:EE:FF", 2000);
+    ble.setMockTime(2500);
+
+    // Food1 now prefers the wireless probe
+    auto food_ble = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(food_ble.isValid(), "Wireless probe reading must be valid");
+    TEST_ASSERT(food_ble.is_wireless, "Food1 must now be wireless");
+    TEST_ASSERT(std::abs(food_ble.celsius - 57.2f) < 0.1f, "Food1 must read wireless 57.2C");
+    TEST_ASSERT(food_ble.battery_pct == 85, "Food1 must report wireless battery 85%");
+
+    // Pit still reads wired
+    auto pit_r2 = composite.readTemperature(Domain::SensorRole::Pit);
+    TEST_ASSERT(pit_r2.isValid() && !pit_r2.is_wireless, "Pit must remain wired even when BLE is active");
+
+    // Wireless probe times out -> Food1 seamlessly falls back to wired
+    ble.setMockTime(35000); // 33s since last packet > 30s timeout
+    auto food_fallback = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(food_fallback.isValid(), "Food1 must fallback when wireless times out");
+    TEST_ASSERT(!food_fallback.is_wireless, "Fallback must return wired sensor");
+
+    std::cout << "  [PASS] testCompositeSensor\n";
+    return 0;
+}
+
 int main() {
     std::cout << "Running C++ Domain & Service Test Suite...\n";
     if (testTemperatureDomain() != 0) return 1;
@@ -298,7 +452,10 @@ int main() {
     if (testSmokerControlService() != 0) return 1;
     if (testWebServerAdapter() != 0) return 1;
     if (testConfigStorage() != 0) return 1;
+    if (testBLEDecoder() != 0) return 1;
+    if (testBLEProbeAdapter() != 0) return 1;
+    if (testCompositeSensor() != 0) return 1;
 
-    std::cout << "\nALL 8 C++ TEST SUITES PASSED CLEANLY!\n";
+    std::cout << "\nALL 11 C++ TEST SUITES PASSED CLEANLY!\n";
     return 0;
 }

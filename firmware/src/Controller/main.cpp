@@ -9,6 +9,8 @@
 #include "../Adapters/Actuators/ESP32PWMBlowerAdapter.hpp"
 #include "../Adapters/Actuators/ESP32ServoDamperAdapter.hpp"
 #include "../Adapters/Sensors/MAX31855SensorAdapter.hpp"
+#include "../Adapters/Sensors/BLEProbeAdapter.hpp"
+#include "../Adapters/Sensors/CompositeSensorAdapter.hpp"
 #include "../Adapters/Telemetry/SerialTelemetryAdapter.hpp"
 #include "../Adapters/Network/WebServerAdapter.hpp"
 #include "../Adapters/Storage/ESP32NVSConfigAdapter.hpp"
@@ -27,13 +29,15 @@ static constexpr uint8_t PIN_CS_FOOD1   = 21; // MAX31855 Chip Select (Food Prob
 // Concrete Adapters
 static Adapters::Actuators::ESP32PWMBlowerAdapter blowerAdapter(PIN_BLOWER_PWM, 0);
 static Adapters::Actuators::ESP32ServoDamperAdapter damperAdapter(PIN_SERVO_PWM, 1);
-static Adapters::Sensors::MAX31855SensorAdapter sensorAdapter(PIN_CS_PIT, PIN_CS_FOOD1, PIN_SPI_SCK, PIN_SPI_MISO);
+static Adapters::Sensors::MAX31855SensorAdapter wiredSensorAdapter(PIN_CS_PIT, PIN_CS_FOOD1, PIN_SPI_SCK, PIN_SPI_MISO);
+static Adapters::Sensors::BLEProbeAdapter bleProbeAdapter(30000);
+static Adapters::Sensors::CompositeSensorAdapter compositeSensorAdapter(wiredSensorAdapter, &bleProbeAdapter);
 static Adapters::Telemetry::SerialTelemetryAdapter telemetryAdapter;
 static Adapters::Storage::ESP32NVSConfigAdapter storageAdapter("smoker_cfg");
 
 // Core Smoker Service
 static Services::SmokerControlService controlService(
-    sensorAdapter,
+    compositeSensorAdapter,
     damperAdapter,
     blowerAdapter,
     &telemetryAdapter,
@@ -72,7 +76,8 @@ void setup() {
     // Initialize Hardware Adapters
     blowerAdapter.begin();
     damperAdapter.begin();
-    sensorAdapter.begin();
+    wiredSensorAdapter.begin();
+    bleProbeAdapter.begin();
     webServerAdapter.begin("SmokerController", "smoker123");
 
     Serial.println("[Init] Hardware and Network Adapters initialized successfully.");
@@ -95,6 +100,7 @@ void setup() {
 void loop() {
     // Core 0 loop: Housekeeping, Web Requests & Servo Idle-Detach check
     webServerAdapter.update();
+    bleProbeAdapter.update(millis());
     damperAdapter.update(millis());
     delay(10);
 }
@@ -104,6 +110,7 @@ void loop() {
 // Desktop simulation / native entry point
 int main() {
     std::cout << "ESP32 Smoker Controller — Native Host Build\n";
+    bleProbeAdapter.begin();
     webServerAdapter.begin();
     webServerAdapter.update();
     std::cout << "Native Host initialization verified cleanly.\n";

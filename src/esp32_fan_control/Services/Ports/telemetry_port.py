@@ -18,6 +18,9 @@ class TelemetrySnapshot:
     demand_pct: float
     lid_open: bool
     status: str
+    is_meat_wireless: bool = False
+    meat_battery_pct: int | None = None
+    meat_probe_name: str = ""
 
 
 class TelemetryPublisherPort(Protocol):

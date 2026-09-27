@@ -25,6 +25,9 @@
   const elMeatTemp = document.getElementById('meat-temp');
   const elMeatStatus = document.getElementById('meat-status');
   const elFoodStatusDot = document.getElementById('food-status-dot');
+  const elFoodSourceBadge = document.getElementById('food-source-badge');
+  const elFoodBatteryWrap = document.getElementById('food-battery-wrap');
+  const elFoodBattery = document.getElementById('food-battery');
   const elAirflowModeBadge = document.getElementById('airflow-mode-badge');
   const elDamperVal = document.getElementById('damper-val');
   const elDamperBar = document.getElementById('damper-bar');
@@ -112,6 +115,22 @@
     if (elFoodStatusDot) {
       elFoodStatusDot.className = meatValid ? 'status-dot dot-ok' : 'status-dot dot-fault';
       elFoodStatusDot.title = meatValid ? 'Food Probe Connected' : 'Food Probe Disconnected';
+    }
+    if (elFoodSourceBadge) {
+      if (snapshot.is_meat_wireless) {
+        elFoodSourceBadge.textContent = snapshot.meat_probe_name || 'BLE';
+        elFoodSourceBadge.style.display = 'inline-flex';
+      } else {
+        elFoodSourceBadge.style.display = 'none';
+      }
+    }
+    if (elFoodBatteryWrap && elFoodBattery) {
+      if (snapshot.is_meat_wireless && snapshot.meat_battery_pct !== null && snapshot.meat_battery_pct !== undefined && snapshot.meat_battery_pct >= 0) {
+        elFoodBattery.textContent = `${snapshot.meat_battery_pct}%`;
+        elFoodBatteryWrap.style.display = 'block';
+      } else {
+        elFoodBatteryWrap.style.display = 'none';
+      }
     }
 
     // 3. System State & Lid Status

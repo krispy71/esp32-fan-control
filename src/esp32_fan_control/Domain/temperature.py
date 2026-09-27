@@ -31,6 +31,9 @@ class TemperatureReading:
     role: SensorRole
     timestamp_s: float
     fault: SensorFault = SensorFault.OK
+    is_wireless: bool = False
+    battery_pct: int | None = None
+    probe_name: str = ""
 
     @property
     def fahrenheit(self) -> float:
@@ -44,10 +47,21 @@ class TemperatureReading:
         role: SensorRole,
         timestamp_s: float,
         fault: SensorFault = SensorFault.OK,
+        is_wireless: bool = False,
+        battery_pct: int | None = None,
+        probe_name: str = "",
     ) -> TemperatureReading:
         """Construct reading from Fahrenheit."""
         celsius = (fahrenheit - 32.0) * 5.0 / 9.0
-        return cls(celsius=celsius, role=role, timestamp_s=timestamp_s, fault=fault)
+        return cls(
+            celsius=celsius,
+            role=role,
+            timestamp_s=timestamp_s,
+            fault=fault,
+            is_wireless=is_wireless,
+            battery_pct=battery_pct,
+            probe_name=probe_name,
+        )
 
     @property
     def is_valid(self) -> bool:

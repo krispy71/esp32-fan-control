@@ -42,9 +42,10 @@ class ConsoleTelemetry(TelemetryPublisherPort):
     def publish(self, snapshot: TelemetrySnapshot) -> None:
         pit_str = f"{snapshot.pit_temp_f:.1f}°F" if snapshot.pit_temp_f is not None else "FAULT"
         meat_str = f"{snapshot.meat_temp_f:.1f}°F" if snapshot.meat_temp_f is not None else "--.-°F"
+        meat_type = f" [{snapshot.meat_probe_name} ({snapshot.meat_battery_pct}%)]" if snapshot.is_meat_wireless else ""
         print(
             f"[{snapshot.timestamp_s:.1f}s] Pit: {pit_str} | Set: {snapshot.setpoint_f:.1f}°F | "
-            f"Meat: {meat_str} | Damper: {snapshot.damper_position_pct:.0f}% | "
+            f"Meat: {meat_str}{meat_type} | Damper: {snapshot.damper_position_pct:.0f}% | "
             f"Fan: {snapshot.blower_speed_pct:.0f}% | {snapshot.status}"
         )
 
@@ -58,6 +59,7 @@ def main() -> None:
     parser.add_argument("--setpoint", type=float, default=None, help="Override target setpoint °F")
     parser.add_argument("--config-file", default="smoker_config.json", help="Path to config JSON file")
     parser.add_argument("--cycles", type=int, default=0, help="Number of cycles to run (0 = infinite)")
+    parser.add_argument("--ble-sim", action="store_true", help="Simulate wireless meat probe (MEATER 135°F / 88%% batt)")
     args = parser.parse_args()
 
     print("=======================================================")
@@ -67,7 +69,25 @@ def main() -> None:
     from esp32_fan_control.Adapters.json_config_adapter import JsonConfigAdapter
 
     config_storage = JsonConfigAdapter(config_file=args.config_file)
-    sensor = SimulatedSensor(start_pit_f=185.0, start_food_f=68.0)
+    wired_sensor = SimulatedSensor(start_pit_f=185.0, start_food_f=68.0)
+
+    if args.ble_sim:
+        from esp32_fan_control.Adapters.ble_probe_adapter import BLEProbeAdapter
+        from esp32_fan_control.Adapters.composite_sensor_adapter import CompositeSensorAdapter
+
+        ble_probe = BLEProbeAdapter(staleness_timeout_s=30.0)
+        # 57.22°C = ~135.0°F
+        ble_probe.simulate_reading(
+            internal_temp_c=57.22,
+            ambient_temp_c=107.22,
+            battery_pct=88,
+            probe_name="MEATER Probe",
+        )
+        sensor = CompositeSensorAdapter(wired_sensor=wired_sensor, wireless_sensor=ble_probe)
+        print("[BLE] Wireless probe simulation enabled (MEATER Probe at 135.0°F, 88% battery)")
+    else:
+        sensor = wired_sensor
+
     actuator = ConsoleActuator()
     telemetry = ConsoleTelemetry()
 
@@ -99,13 +119,13 @@ def main() -> None:
             # - Heat loss to ambient (70°F)
             # - Heat gain proportional to damper opening + forced fan draft
             ambient_f = 70.0
-            cooling = (sensor.pit_f - ambient_f) * 0.015
+            cooling = (wired_sensor.pit_f - ambient_f) * 0.015
             heating = (actuator.damper_pct * 0.03) + (actuator.blower_pct * 0.08)
-            sensor.pit_f = max(ambient_f, sensor.pit_f - cooling + heating)
+            wired_sensor.pit_f = max(ambient_f, wired_sensor.pit_f - cooling + heating)
 
             # Meat warms slowly towards pit temp
-            if sensor.food_f < sensor.pit_f:
-                sensor.food_f += (sensor.pit_f - sensor.food_f) * 0.001
+            if wired_sensor.food_f < wired_sensor.pit_f:
+                wired_sensor.food_f += (wired_sensor.pit_f - wired_sensor.food_f) * 0.001
 
             service.execute_cycle(t)
             t += 1.0

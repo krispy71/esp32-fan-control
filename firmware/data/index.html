@@ -41,7 +41,10 @@
       <!-- Meat Probe 1 Card -->
       <section class="card food-card" aria-labelledby="food-heading">
         <div class="card-header">
-          <h2 id="food-heading">Food Probe (Meat)</h2>
+          <div style="display: inline-flex; align-items: center; gap: 8px;">
+            <h2 id="food-heading">Food Probe (Meat)</h2>
+            <span id="food-source-badge" class="badge badge-source" style="display: none;">BLE</span>
+          </div>
           <span id="food-status-dot" class="status-dot dot-ok" title="Sensor Healthy"></span>
         </div>
         <div class="temp-readout">
@@ -51,6 +54,7 @@
         <div class="card-footer-stats">
           <div>Status: <span id="meat-status">Monitoring</span></div>
           <div>Target: <strong>203.0&deg;F</strong></div>
+          <div id="food-battery-wrap" style="display: none;">Battery: <strong id="food-battery">--%</strong></div>
         </div>
       </section>
 

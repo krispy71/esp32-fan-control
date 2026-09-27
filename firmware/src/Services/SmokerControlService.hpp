@@ -36,7 +36,7 @@ public:
           lid_detector_(),
           is_fail_safe_(false),
           status_("INITIALIZED"),
-          last_snapshot_{0, 0.0f, 0.0f, target_setpoint_f, 0.0f, 0.0f, 0.0f, false, false, false, "INITIALIZED"}
+          last_snapshot_{0, 0.0f, 0.0f, target_setpoint_f, 0.0f, 0.0f, 0.0f, false, false, false, "INITIALIZED", false, -1, ""}
     {
         config_.setpoint_f = target_setpoint_f;
         config_.pid_kp = pid_config.kp;
@@ -134,7 +134,10 @@ public:
                 false,
                 meat_reading.isValid(),
                 false,
-                status_
+                status_,
+                meat_reading.is_wireless,
+                meat_reading.battery_pct,
+                meat_reading.probe_name
             };
             last_snapshot_ = snapshot;
             if (telemetry_) {
@@ -165,7 +168,10 @@ public:
                 true,
                 meat_reading.isValid(),
                 true,
-                status_
+                status_,
+                meat_reading.is_wireless,
+                meat_reading.battery_pct,
+                meat_reading.probe_name
             };
             last_snapshot_ = snapshot;
             if (telemetry_) {
@@ -194,7 +200,10 @@ public:
             true,
             meat_reading.isValid(),
             false,
-            status_
+            status_,
+            meat_reading.is_wireless,
+            meat_reading.battery_pct,
+            meat_reading.probe_name
         };
         last_snapshot_ = snapshot;
 
