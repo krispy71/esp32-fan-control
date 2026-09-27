@@ -11,6 +11,7 @@
 #include "../Adapters/Sensors/MAX31855SensorAdapter.hpp"
 #include "../Adapters/Telemetry/SerialTelemetryAdapter.hpp"
 #include "../Adapters/Network/WebServerAdapter.hpp"
+#include "../Adapters/Storage/ESP32NVSConfigAdapter.hpp"
 #include "../Services/SmokerControlService.hpp"
 
 using namespace SmokerController;
@@ -28,6 +29,7 @@ static Adapters::Actuators::ESP32PWMBlowerAdapter blowerAdapter(PIN_BLOWER_PWM, 
 static Adapters::Actuators::ESP32ServoDamperAdapter damperAdapter(PIN_SERVO_PWM, 1);
 static Adapters::Sensors::MAX31855SensorAdapter sensorAdapter(PIN_CS_PIT, PIN_CS_FOOD1, PIN_SPI_SCK, PIN_SPI_MISO);
 static Adapters::Telemetry::SerialTelemetryAdapter telemetryAdapter;
+static Adapters::Storage::ESP32NVSConfigAdapter storageAdapter("smoker_cfg");
 
 // Core Smoker Service
 static Services::SmokerControlService controlService(
@@ -35,7 +37,10 @@ static Services::SmokerControlService controlService(
     damperAdapter,
     blowerAdapter,
     &telemetryAdapter,
-    225.0f // Initial default setpoint: 225°F
+    225.0f, // Default initial setpoint
+    Domain::ActuatorCoordinator{},
+    Domain::PIDConfig{},
+    &storageAdapter
 );
 
 // Web Server Adapter

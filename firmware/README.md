@@ -18,6 +18,7 @@ firmware/
 │   ├── Domain/                 # Pure domain business logic (zero Arduino/ESP32 dependencies)
 │   │   ├── Temperature.hpp     # TemperatureReading, SensorRole, SensorFault
 │   │   ├── Airflow.hpp         # AirflowDemand, ActuatorTargets, ActuatorCoordinator
+│   │   ├── Configuration.hpp   # SmokerConfig domain model and validation invariants
 │   │   ├── PID.hpp             # Discrete PID regulator with anti-windup clamping
 │   │   └── LidDetector.hpp     # Lid-open suppression state machine
 │   ├── Services/               # Core application orchestration
@@ -25,9 +26,10 @@ firmware/
 │   │   │   ├── TemperatureSensorPort.hpp
 │   │   │   ├── DamperActuatorPort.hpp
 │   │   │   ├── BlowerActuatorPort.hpp
+│   │   │   ├── ConfigStoragePort.hpp
 │   │   │   └── TelemetryPort.hpp
 │   │   └── SmokerControlService.hpp
-│   ├── Adapters/               # Concrete hardware and network drivers
+│   ├── Adapters/               # Concrete hardware, network, and storage drivers
 │   │   ├── Actuators/
 │   │   │   ├── ESP32ServoDamperAdapter.hpp # 50Hz LEDC PWM with idle-detach
 │   │   │   └── ESP32PWMBlowerAdapter.hpp   # 25kHz ultrasonic MOSFET PWM
@@ -35,6 +37,8 @@ firmware/
 │   │   │   └── MAX31855SensorAdapter.hpp   # SPI thermocouple acquisition & fault decoding
 │   │   ├── Telemetry/
 │   │   │   └── SerialTelemetryAdapter.hpp  # Console/serial output formatter
+│   │   ├── Storage/
+│   │   │   └── ESP32NVSConfigAdapter.hpp   # Non-Volatile Storage (NVS) Preferences adapter
 │   │   └── Network/
 │   │       └── WebServerAdapter.hpp        # HTTP REST endpoints & LittleFS file server
 │   └── Controller/
@@ -73,7 +77,9 @@ The web dashboard is served directly from ESP32 LittleFS flash storage over Soft
 | `GET` | `/app.js` | Serves real-time JavaScript frontend |
 | `GET` | `/api/telemetry` | Returns instantaneous JSON state snapshot |
 | `GET` | `/api/events` | Server-Sent Events (SSE) telemetry stream at 1Hz |
-| `POST` | `/api/setpoint` | Update pit setpoint: `{"setpoint": 225.0}` |
+| `GET` | `/api/config` | Read persisted tuning config ($K_p, K_i, K_d$, thresholds) |
+| `POST` | `/api/setpoint` | Update pit setpoint: `{"setpoint": 225.0}` (auto-saved to NVS) |
+| `POST` | `/api/config` | Update tuning parameters and persist to NVS flash |
 | `POST` | `/api/lid-pause` | Trigger or toggle manual lid-opening airflow suppression |
 
 ### Example Telemetry JSON Payload

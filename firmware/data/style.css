@@ -445,6 +445,63 @@ canvas {
   display: block;
 }
 
+/* --- Settings & Tuning --- */
+.settings-card {
+  grid-column: 1 / -1;
+}
+
+.tuning-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+  align-items: flex-end;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-item label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.setting-item input {
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  padding: 8px 10px;
+}
+
+.setting-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+
+.btn-secondary {
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.save-indicator {
+  font-size: 0.8rem;
+  color: #34d399;
+  transition: opacity 0.3s;
+}
+
 /* --- Footer --- */
 .footer {
   display: flex;

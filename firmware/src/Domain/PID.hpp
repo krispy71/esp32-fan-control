@@ -31,6 +31,9 @@ public:
     [[nodiscard]] float setpoint() const noexcept { return setpoint_; }
     void setSetpoint(float value) noexcept { setpoint_ = value; }
 
+    [[nodiscard]] const PIDConfig& config() const noexcept { return config_; }
+    void setConfig(const PIDConfig& cfg) noexcept { config_ = cfg; }
+
     [[nodiscard]] float integral() const noexcept { return integral_; }
 
     void reset() noexcept {

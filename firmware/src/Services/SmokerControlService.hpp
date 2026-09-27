@@ -1,11 +1,13 @@
 #pragma once
 
 #include "../Domain/Airflow.hpp"
+#include "../Domain/Configuration.hpp"
 #include "../Domain/LidDetector.hpp"
 #include "../Domain/PID.hpp"
 #include "../Domain/Temperature.hpp"
 #include "Ports/DamperActuatorPort.hpp"
 #include "Ports/BlowerActuatorPort.hpp"
+#include "Ports/ConfigStoragePort.hpp"
 #include "Ports/TemperatureSensorPort.hpp"
 #include "Ports/TelemetryPort.hpp"
 
@@ -20,24 +22,79 @@ public:
         Ports::ITelemetryPublisherPort* telemetry = nullptr,
         float target_setpoint_f = 225.0f,
         Domain::ActuatorCoordinator coordinator = Domain::ActuatorCoordinator{},
-        Domain::PIDConfig pid_config = Domain::PIDConfig{}
+        Domain::PIDConfig pid_config = Domain::PIDConfig{},
+        Ports::IConfigStoragePort* storage = nullptr
     ) noexcept
         : sensor_(sensor),
           damper_(damper),
           blower_(blower),
           telemetry_(telemetry),
+          storage_(storage),
           setpoint_f_(target_setpoint_f),
           coordinator_(coordinator),
           pid_(target_setpoint_f, pid_config),
           lid_detector_(),
           is_fail_safe_(false),
           status_("INITIALIZED"),
-          last_snapshot_{0, 0.0f, 0.0f, target_setpoint_f, 0.0f, 0.0f, 0.0f, false, false, false, "INITIALIZED"} {}
+          last_snapshot_{0, 0.0f, 0.0f, target_setpoint_f, 0.0f, 0.0f, 0.0f, false, false, false, "INITIALIZED"}
+    {
+        config_.setpoint_f = target_setpoint_f;
+        config_.pid_kp = pid_config.kp;
+        config_.pid_ki = pid_config.ki;
+        config_.pid_kd = pid_config.kd;
+        config_.airflow_threshold_pct = coordinator.blowerThreshold();
+        if (storage_) {
+            Domain::SmokerConfig loaded{};
+            if (storage_->loadConfig(loaded) && loaded.isValid()) {
+                config_ = loaded;
+                setpoint_f_ = config_.setpoint_f;
+                pid_.setSetpoint(config_.setpoint_f);
+                pid_.setConfig(Domain::PIDConfig{
+                    config_.pid_kp,
+                    config_.pid_ki,
+                    config_.pid_kd
+                });
+                coordinator_ = Domain::ActuatorCoordinator(config_.airflow_threshold_pct);
+                lid_detector_ = Domain::LidOpenDetector(Domain::LidDetectorConfig{
+                    config_.lid_drop_threshold_deg,
+                    30000,
+                    config_.lid_pause_duration_ms
+                });
+            }
+        }
+    }
+
+    [[nodiscard]] const Domain::SmokerConfig& config() const noexcept { return config_; }
+
+    void updateConfig(const Domain::SmokerConfig& new_cfg) noexcept {
+        if (!new_cfg.isValid()) return;
+        config_ = new_cfg;
+        setpoint_f_ = config_.setpoint_f;
+        pid_.setSetpoint(config_.setpoint_f);
+        pid_.setConfig(Domain::PIDConfig{
+            config_.pid_kp,
+            config_.pid_ki,
+            config_.pid_kd
+        });
+        coordinator_ = Domain::ActuatorCoordinator(config_.airflow_threshold_pct);
+        lid_detector_ = Domain::LidOpenDetector(Domain::LidDetectorConfig{
+            config_.lid_drop_threshold_deg,
+            30000,
+            config_.lid_pause_duration_ms
+        });
+        if (storage_) {
+            storage_->saveConfig(config_);
+        }
+    }
 
     [[nodiscard]] float setpoint() const noexcept { return setpoint_f_; }
     void setSetpoint(float deg_f) noexcept {
+        config_.setpoint_f = deg_f;
         setpoint_f_ = deg_f;
         pid_.setSetpoint(deg_f);
+        if (storage_) {
+            storage_->saveConfig(config_);
+        }
     }
 
     [[nodiscard]] bool isFailSafe() const noexcept { return is_fail_safe_; }
@@ -153,6 +210,8 @@ private:
     Ports::IDamperActuatorPort& damper_;
     Ports::IBlowerActuatorPort& blower_;
     Ports::ITelemetryPublisherPort* telemetry_;
+    Ports::IConfigStoragePort* storage_;
+    Domain::SmokerConfig config_;
     float setpoint_f_;
     Domain::ActuatorCoordinator coordinator_;
     Domain::PIDRegulator pid_;

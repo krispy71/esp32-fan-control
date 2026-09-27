@@ -103,6 +103,8 @@ class WebServerAdapter:
                     self._handle_telemetry()
                 elif path == "/api/events":
                     self._handle_events()
+                elif path == "/api/config":
+                    self._handle_get_config()
                 else:
                     self._handle_static_file(path)
 
@@ -113,6 +115,8 @@ class WebServerAdapter:
                     self._handle_setpoint()
                 elif path == "/api/lid-pause":
                     self._handle_lid_pause()
+                elif path == "/api/config":
+                    self._handle_post_config()
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
@@ -197,6 +201,51 @@ class WebServerAdapter:
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
                 self.wfile.write(resp)
+
+            def _handle_get_config(self) -> None:
+                cfg = adapter._service.config
+                data = {
+                    "setpoint_f": cfg.setpoint_f,
+                    "pid_kp": cfg.pid_kp,
+                    "pid_ki": cfg.pid_ki,
+                    "pid_kd": cfg.pid_kd,
+                    "airflow_threshold_pct": cfg.airflow_threshold_pct,
+                    "lid_drop_threshold_deg": cfg.lid_drop_threshold_deg,
+                    "lid_pause_duration_s": cfg.lid_pause_duration_s,
+                }
+                payload = json.dumps(data).encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def _handle_post_config(self) -> None:
+                content_len = int(self.headers.get("Content-Length", 0))
+                raw_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
+                try:
+                    body = json.loads(raw_body.decode("utf-8"))
+                    from esp32_fan_control.Domain.configuration import SmokerConfig
+                    curr = adapter._service.config
+                    new_cfg = SmokerConfig(
+                        setpoint_f=float(body.get("setpoint_f", curr.setpoint_f)),
+                        pid_kp=float(body.get("pid_kp", curr.pid_kp)),
+                        pid_ki=float(body.get("pid_ki", curr.pid_ki)),
+                        pid_kd=float(body.get("pid_kd", curr.pid_kd)),
+                        airflow_threshold_pct=float(body.get("airflow_threshold_pct", curr.airflow_threshold_pct)),
+                        lid_drop_threshold_deg=float(body.get("lid_drop_threshold_deg", curr.lid_drop_threshold_deg)),
+                        lid_pause_duration_s=float(body.get("lid_pause_duration_s", curr.lid_pause_duration_s)),
+                    )
+                    adapter._service.update_config(new_cfg)
+                    resp = json.dumps({"status": "ok", "config": body}).encode("utf-8")
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                except Exception as err:
+                    self.send_error(HTTPStatus.BAD_REQUEST, f"Invalid config: {err}")
 
             def _handle_static_file(self, path: str) -> None:
                 if path in ("/", ""):

@@ -113,6 +113,40 @@ public:
             server_.send(200, "application/json", resp);
         });
 
+        server_.on("/api/config", HTTP_GET, [this]() {
+            char json_buf[384];
+            formatConfigJson(json_buf, sizeof(json_buf));
+            server_.send(200, "application/json", json_buf);
+        });
+
+        server_.on("/api/config", HTTP_POST, [this]() {
+            if (!server_.hasArg("plain")) {
+                server_.send(400, "application/json", "{\"error\":\"Missing body\"}");
+                return;
+            }
+            String body = server_.arg("plain");
+            Domain::SmokerConfig cfg = service_.config();
+            int idx_sp = body.indexOf("\"setpoint_f\":");
+            if (idx_sp >= 0) cfg.setpoint_f = body.substring(idx_sp + 13).toFloat();
+            int idx_kp = body.indexOf("\"pid_kp\":");
+            if (idx_kp >= 0) cfg.pid_kp = body.substring(idx_kp + 9).toFloat();
+            int idx_ki = body.indexOf("\"pid_ki\":");
+            if (idx_ki >= 0) cfg.pid_ki = body.substring(idx_ki + 9).toFloat();
+            int idx_kd = body.indexOf("\"pid_kd\":");
+            if (idx_kd >= 0) cfg.pid_kd = body.substring(idx_kd + 9).toFloat();
+            int idx_th = body.indexOf("\"airflow_threshold_pct\":");
+            if (idx_th >= 0) cfg.airflow_threshold_pct = body.substring(idx_th + 24).toFloat();
+            int idx_ld = body.indexOf("\"lid_drop_threshold_deg\":");
+            if (idx_ld >= 0) cfg.lid_drop_threshold_deg = body.substring(idx_ld + 25).toFloat();
+
+            if (cfg.isValid()) {
+                service_.updateConfig(cfg);
+                server_.send(200, "application/json", "{\"status\":\"ok\"}");
+                return;
+            }
+            server_.send(400, "application/json", "{\"error\":\"Invalid config parameters\"}");
+        });
+
         server_.begin();
         Serial.printf("[Web] HTTP Server listening on port %u\n", port_);
 #endif
@@ -153,6 +187,27 @@ public:
             snap.is_meat_valid ? "true" : "false",
             snap.lid_open ? "true" : "false",
             snap.status ? snap.status : "OK"
+        );
+    }
+
+    void formatConfigJson(char* buf, size_t max_len) const noexcept {
+        const auto& cfg = service_.config();
+        snprintf(
+            buf, max_len,
+            "{\"setpoint_f\":%.1f,"
+            "\"pid_kp\":%.2f,"
+            "\"pid_ki\":%.4f,"
+            "\"pid_kd\":%.2f,"
+            "\"airflow_threshold_pct\":%.1f,"
+            "\"lid_drop_threshold_deg\":%.1f,"
+            "\"lid_pause_duration_ms\":%u}",
+            cfg.setpoint_f,
+            cfg.pid_kp,
+            cfg.pid_ki,
+            cfg.pid_kd,
+            cfg.airflow_threshold_pct,
+            cfg.lid_drop_threshold_deg,
+            cfg.lid_pause_duration_ms
         );
     }
 

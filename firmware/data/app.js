@@ -490,6 +490,64 @@
       });
   };
 
+  function fetchConfig() {
+    fetch('/api/config')
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((cfg) => {
+        const elKp = document.getElementById('cfg-kp');
+        const elKi = document.getElementById('cfg-ki');
+        const elKd = document.getElementById('cfg-kd');
+        const elThresh = document.getElementById('cfg-threshold');
+        if (elKp && cfg.pid_kp !== undefined) elKp.value = cfg.pid_kp;
+        if (elKi && cfg.pid_ki !== undefined) elKi.value = cfg.pid_ki;
+        if (elKd && cfg.pid_kd !== undefined) elKd.value = cfg.pid_kd;
+        if (elThresh && cfg.airflow_threshold_pct !== undefined) elThresh.value = cfg.airflow_threshold_pct;
+      })
+      .catch((err) => {
+        console.warn('Could not load config:', err);
+      });
+  }
+
+  window.submitTuningConfig = function () {
+    const elKp = document.getElementById('cfg-kp');
+    const elKi = document.getElementById('cfg-ki');
+    const elKd = document.getElementById('cfg-kd');
+    const elThresh = document.getElementById('cfg-threshold');
+    const msg = document.getElementById('save-msg');
+
+    const kp = parseFloat(elKp ? elKp.value : 3.0);
+    const ki = parseFloat(elKi ? elKi.value : 0.02);
+    const kd = parseFloat(elKd ? elKd.value : 15.0);
+    const thresh = parseFloat(elThresh ? elThresh.value : 40.0);
+
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pid_kp: kp,
+        pid_ki: ki,
+        pid_kd: kd,
+        airflow_threshold_pct: thresh
+      })
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(() => {
+        if (msg) {
+          msg.textContent = 'Saved to NVS flash!';
+          setTimeout(() => { msg.textContent = ''; }, 3000);
+        }
+      })
+      .catch((err) => {
+        alert('Failed to save config: ' + err.message);
+      });
+  };
+
   // Resize listener for Canvas responsiveness
   window.addEventListener('resize', function () {
     renderTrendChart();
@@ -497,8 +555,12 @@
 
   // Start telemetry loop on DOM readiness
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startStreaming);
+    document.addEventListener('DOMContentLoaded', function () {
+      startStreaming();
+      fetchConfig();
+    });
   } else {
     startStreaming();
+    fetchConfig();
   }
 })();

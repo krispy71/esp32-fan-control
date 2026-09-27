@@ -55,7 +55,8 @@ def main() -> None:
     parser.add_argument("--web", action="store_true", help="Start local web dashboard")
     parser.add_argument("--host", default="127.0.0.1", help="Web server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8080, help="Web server port (default: 8080)")
-    parser.add_argument("--setpoint", type=float, default=225.0, help="Initial target setpoint °F")
+    parser.add_argument("--setpoint", type=float, default=None, help="Override target setpoint °F")
+    parser.add_argument("--config-file", default="smoker_config.json", help="Path to config JSON file")
     parser.add_argument("--cycles", type=int, default=0, help="Number of cycles to run (0 = infinite)")
     args = parser.parse_args()
 
@@ -63,6 +64,9 @@ def main() -> None:
     print("  ESP32 Smoker Fan & Damper Controller — Python Runner")
     print("=======================================================")
 
+    from esp32_fan_control.Adapters.json_config_adapter import JsonConfigAdapter
+
+    config_storage = JsonConfigAdapter(config_file=args.config_file)
     sensor = SimulatedSensor(start_pit_f=185.0, start_food_f=68.0)
     actuator = ConsoleActuator()
     telemetry = ConsoleTelemetry()
@@ -72,8 +76,12 @@ def main() -> None:
         damper_port=actuator,
         blower_port=actuator,
         telemetry_port=telemetry,
-        target_setpoint_f=args.setpoint,
+        target_setpoint_f=args.setpoint if args.setpoint is not None else 225.0,
+        config_storage=config_storage,
     )
+
+    if args.setpoint is not None:
+        service.setpoint_f = args.setpoint
 
     web_server = None
     if args.web:

@@ -46,6 +46,14 @@ class PIDRegulator:
         self._setpoint = value
 
     @property
+    def config(self) -> PIDConfig:
+        return self._config
+
+    @config.setter
+    def config(self, value: PIDConfig) -> None:
+        self._config = value
+
+    @property
     def integral(self) -> float:
         return self._integral
 

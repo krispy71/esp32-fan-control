@@ -12,6 +12,7 @@
 #include "../src/Domain/Temperature.hpp"
 #include "../src/Adapters/Sensors/MAX31855SensorAdapter.hpp"
 #include "../src/Adapters/Network/WebServerAdapter.hpp"
+#include "../src/Adapters/Storage/ESP32NVSConfigAdapter.hpp"
 #include "../src/Services/SmokerControlService.hpp"
 
 using namespace SmokerController;
@@ -236,6 +237,57 @@ static int testWebServerAdapter() {
     return 0;
 }
 
+static int testConfigStorage() {
+    // 1. Invariant testing
+    Domain::SmokerConfig valid_cfg{};
+    TEST_ASSERT(valid_cfg.isValid(), "Default config must be valid");
+
+    Domain::SmokerConfig invalid_sp{};
+    invalid_sp.setpoint_f = 40.0f;
+    TEST_ASSERT(!invalid_sp.isValid(), "Setpoint 40F must be invalid");
+
+    Domain::SmokerConfig invalid_th{};
+    invalid_th.airflow_threshold_pct = 95.0f;
+    TEST_ASSERT(!invalid_th.isValid(), "Threshold 95% must be invalid");
+
+    // 2. Storage adapter roundtrip
+    Adapters::Storage::ESP32NVSConfigAdapter storage("test_cfg");
+    Domain::SmokerConfig out_cfg{};
+    TEST_ASSERT(!storage.loadConfig(out_cfg), "Empty storage should return false");
+
+    valid_cfg.setpoint_f = 265.0f;
+    valid_cfg.pid_kp = 4.2f;
+    TEST_ASSERT(storage.saveConfig(valid_cfg), "Saving valid config must succeed");
+
+    Domain::SmokerConfig loaded{};
+    TEST_ASSERT(storage.loadConfig(loaded), "Loading saved config must succeed");
+    TEST_ASSERT(loaded.setpoint_f == 265.0f, "Loaded setpoint must be 265.0");
+    TEST_ASSERT(loaded.pid_kp == 4.2f, "Loaded kp must be 4.2");
+
+    // 3. Service persistence integration
+    MockSensor sensor;
+    MockDamper damper;
+    MockBlower blower;
+    sensor.reading = Domain::TemperatureReading::fromFahrenheit(225.0f, Domain::SensorRole::Pit, 1000);
+
+    Services::SmokerControlService service(
+        sensor, damper, blower, nullptr, 225.0f,
+        Domain::ActuatorCoordinator{}, Domain::PIDConfig{}, &storage
+    );
+
+    // Should have restored 265.0f from storage
+    TEST_ASSERT(service.setpoint() == 265.0f, "Service must restore persisted setpoint 265.0 on init");
+
+    // Updating setpoint via service should auto-save to storage
+    service.setSetpoint(280.0f);
+    Domain::SmokerConfig reloaded{};
+    TEST_ASSERT(storage.loadConfig(reloaded), "Storage load must succeed");
+    TEST_ASSERT(reloaded.setpoint_f == 280.0f, "Storage must reflect updated setpoint 280.0");
+
+    std::cout << "  [PASS] testConfigStorage\n";
+    return 0;
+}
+
 int main() {
     std::cout << "Running C++ Domain & Service Test Suite...\n";
     if (testTemperatureDomain() != 0) return 1;
@@ -245,7 +297,8 @@ int main() {
     if (testMAX31855Decoding() != 0) return 1;
     if (testSmokerControlService() != 0) return 1;
     if (testWebServerAdapter() != 0) return 1;
+    if (testConfigStorage() != 0) return 1;
 
-    std::cout << "\nALL 7 C++ TEST SUITES PASSED CLEANLY!\n";
+    std::cout << "\nALL 8 C++ TEST SUITES PASSED CLEANLY!\n";
     return 0;
 }

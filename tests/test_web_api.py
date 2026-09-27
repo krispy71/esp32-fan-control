@@ -154,3 +154,26 @@ def test_post_lid_pause_endpoint(running_server):
         data2 = json.loads(resp2.read().decode("utf-8"))
         assert data2["lid_open"] is False
         assert service.is_lid_open is False
+
+
+def test_get_and_post_config_endpoint(running_server):
+    adapter, service = running_server
+    url = f"http://127.0.0.1:{adapter.port}/api/config"
+
+    # GET config
+    with urllib.request.urlopen(url) as resp:
+        assert resp.status == 200
+        cfg = json.loads(resp.read().decode("utf-8"))
+        assert cfg["setpoint_f"] == 225.0
+        assert cfg["pid_kp"] == 3.0
+
+    # POST updated config
+    payload = json.dumps({"setpoint_f": 260.0, "pid_kp": 5.0}).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        res_data = json.loads(resp.read().decode("utf-8"))
+        assert res_data["status"] == "ok"
+        assert service.setpoint_f == 260.0
+        assert service.config.pid_kp == 5.0
+

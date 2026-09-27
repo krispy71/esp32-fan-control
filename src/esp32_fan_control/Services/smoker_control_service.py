@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from esp32_fan_control.Domain.airflow import ActuatorCoordinator, AirflowDemand
-from esp32_fan_control.Domain.lid_detector import LidOpenDetector
+from esp32_fan_control.Domain.configuration import SmokerConfig
+from esp32_fan_control.Domain.lid_detector import LidDetectorConfig, LidOpenDetector
 from esp32_fan_control.Domain.pid import PIDConfig, PIDRegulator
 from esp32_fan_control.Domain.temperature import SensorFault, SensorRole, TemperatureReading
 from esp32_fan_control.Services.Ports.actuator_ports import BlowerActuatorPort, DamperActuatorPort
+from esp32_fan_control.Services.Ports.config_storage_port import ConfigStoragePort
 from esp32_fan_control.Services.Ports.sensor_port import TemperatureSensorPort
 from esp32_fan_control.Services.Ports.telemetry_port import TelemetryPublisherPort, TelemetrySnapshot
 
@@ -32,16 +34,55 @@ class SmokerControlService:
         target_setpoint_f: float = 225.0,
         coordinator: ActuatorCoordinator | None = None,
         pid_config: PIDConfig | None = None,
+        config_storage: ConfigStoragePort | None = None,
+        config: SmokerConfig | None = None,
     ) -> None:
         self._sensor = sensor_port
         self._damper = damper_port
         self._blower = blower_port
         self._telemetry = telemetry_port
-        self._setpoint_f = target_setpoint_f
+        self._config_storage = config_storage
 
-        self._coordinator = coordinator or ActuatorCoordinator()
-        self._pid = PIDRegulator(target_setpoint=target_setpoint_f, config=pid_config)
-        self._lid_detector = LidOpenDetector()
+        # Load persisted config if available
+        loaded_config: SmokerConfig | None = None
+        if config is not None:
+            loaded_config = config
+        elif self._config_storage is not None:
+            loaded_config = self._config_storage.load_config()
+
+        if loaded_config is not None:
+            self._config = loaded_config
+        else:
+            kp = pid_config.kp if pid_config else 3.0
+            ki = pid_config.ki if pid_config else 0.02
+            kd = pid_config.kd if pid_config else 15.0
+            thresh = coordinator.blower_threshold_pct if coordinator else 40.0
+            self._config = SmokerConfig(
+                setpoint_f=target_setpoint_f,
+                pid_kp=kp,
+                pid_ki=ki,
+                pid_kd=kd,
+                airflow_threshold_pct=thresh,
+            )
+
+        self._setpoint_f = self._config.setpoint_f
+        self._coordinator = coordinator or ActuatorCoordinator(
+            blower_threshold_pct=self._config.airflow_threshold_pct
+        )
+        self._pid = PIDRegulator(
+            target_setpoint=self._setpoint_f,
+            config=PIDConfig(
+                kp=self._config.pid_kp,
+                ki=self._config.pid_ki,
+                kd=self._config.pid_kd,
+            ),
+        )
+        self._lid_detector = LidOpenDetector(
+            LidDetectorConfig(
+                drop_threshold_deg=self._config.lid_drop_threshold_deg,
+                pause_duration_s=self._config.lid_pause_duration_s,
+            )
+        )
 
         self._last_pit_temp_f: float | None = None
         self._last_meat_temp_f: float | None = None
@@ -50,13 +91,45 @@ class SmokerControlService:
         self._last_snapshot: TelemetrySnapshot | None = None
 
     @property
+    def config(self) -> SmokerConfig:
+        return self._config
+
+    def update_config(self, new_config: SmokerConfig) -> None:
+        """Update runtime configuration and persist to storage if configured."""
+        self._config = new_config
+        self._setpoint_f = new_config.setpoint_f
+        self._pid.setpoint = new_config.setpoint_f
+        self._pid.config = PIDConfig(
+            kp=new_config.pid_kp,
+            ki=new_config.pid_ki,
+            kd=new_config.pid_kd,
+        )
+        self._coordinator = ActuatorCoordinator(blower_threshold_pct=new_config.airflow_threshold_pct)
+        self._lid_detector = LidOpenDetector(
+            LidDetectorConfig(
+                drop_threshold_deg=new_config.lid_drop_threshold_deg,
+                pause_duration_s=new_config.lid_pause_duration_s,
+            )
+        )
+        if self._config_storage is not None:
+            self._config_storage.save_config(new_config)
+
+    @property
     def setpoint_f(self) -> float:
         return self._setpoint_f
 
     @setpoint_f.setter
     def setpoint_f(self, value: float) -> None:
-        self._setpoint_f = value
-        self._pid.setpoint = value
+        new_config = SmokerConfig(
+            setpoint_f=value,
+            pid_kp=self._config.pid_kp,
+            pid_ki=self._config.pid_ki,
+            pid_kd=self._config.pid_kd,
+            airflow_threshold_pct=self._config.airflow_threshold_pct,
+            lid_drop_threshold_deg=self._config.lid_drop_threshold_deg,
+            lid_pause_duration_s=self._config.lid_pause_duration_s,
+        )
+        self.update_config(new_config)
 
     @property
     def is_fail_safe(self) -> bool:
