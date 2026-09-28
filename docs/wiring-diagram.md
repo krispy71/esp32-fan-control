@@ -13,8 +13,9 @@
   **Yes.** The entire circuit can be assembled and fully bench-tested on a standard half-size or full-size solderless breadboard using DuPont jumper wires.
 * **How to package for the 3D printed housing?**  
   For final installation inside the 3D-printed pod (`cad/smoker_damper.scad`), you can either:
-  1. Use common pre-built breakout modules (e.g. a $1 MOSFET breakout module, a MAX31855 breakout board, and an ESP32 DevKit).
-  2. Solder the few discrete components (MOSFET, diode, resistors, capacitor) onto a small $1 prototype perfboard / stripboard (approx. $30\text{mm} \times 50\text{mm}$).
+  1. **Build the Hobbyist Green Perfboard Layout (Recommended)**: Follow the complete step-by-step [Hobbyist Green Perfboard Circuit Board Layout & Assembly Guide](perfboard-assembly-guide.md), which provides a full coordinate grid layout, solder trace plan, and BOM for a standard $40\,\text{mm} \times 60\,\text{mm}$ ($4 \times 6\,\text{cm}$) board that drops directly into the electronics bay.
+  2. Use common pre-built breakout modules (e.g. a $1 MOSFET breakout module, a MAX31855 breakout board, and an ESP32 DevKit).
+  3. Solder the discrete components onto a compact prototype perfboard / stripboard.
 
 ---
 
