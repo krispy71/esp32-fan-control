@@ -2,6 +2,12 @@
 
 This directory contains the 3D-printable mechanical CAD design for the ESP32 Smoker Controller, implemented in OpenSCAD.
 
+> **Assembly Guide**: For full step-by-step mechanical fastener assembly, see [docs/assembly-guide.md](../docs/assembly-guide.md).
+
+![Exploded Assembly Diagram](parts_assembly_diagram.jpg)
+
+---
+
 ## Design Highlights
 
 1. **Parametric Output Adapter**:
