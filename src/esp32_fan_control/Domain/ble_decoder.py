@@ -146,6 +146,67 @@ class BLEAdvertisementDecoder:
             return None
 
     @staticmethod
+    def decode_meater_gatt(payload: bytes, mac: str = "") -> BLEProbeReading | None:
+        """
+        Decodes raw GATT characteristic 7EDDA774-045E-4BBF-909B-45D1991A2876 payload from MEATER probe.
+        Bytes 0-1: tip raw little-endian -> (tip_raw + 8.0) / 16.0
+        Bytes 2-3: ambient raw (ra)
+        Bytes 4-5: ambient offset (oa)
+        """
+        if len(payload) < 2:
+            return None
+        try:
+            tip_raw = struct.unpack("<H", payload[:2])[0]
+            tip_c = (tip_raw + 8.0) / 16.0
+            if not (-20.0 <= tip_c <= 125.0):
+                return None
+
+            ambient_c = None
+            if len(payload) >= 6:
+                ra = struct.unpack("<H", payload[2:4])[0]
+                oa = struct.unpack("<H", payload[4:6])[0]
+                min_oa = min(oa, 48)
+                diff = max(0, ra - min_oa)
+                amb_adj = (diff * 16 * 589) // 1487
+                amb = (tip_raw + amb_adj + 8.0) / 16.0
+                if -20.0 <= amb <= 350.0:
+                    ambient_c = amb
+
+            battery = payload[7] if len(payload) >= 8 and payload[7] <= 100 else None
+            return BLEProbeReading(
+                internal_temp_c=tip_c,
+                ambient_temp_c=ambient_c,
+                mac_address=mac,
+                probe_name="MEATER (Direct)",
+                battery_pct=battery,
+                protocol=BLEProbeProtocol.MEATER,
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def decode_meater_cloud_dict(data: dict, mac: str = "") -> BLEProbeReading | None:
+        """Decodes device dictionary from MEATER Cloud public REST API response."""
+        try:
+            temp_obj = data.get("temperature", {})
+            internal_c = temp_obj.get("internal")
+            if internal_c is None:
+                return None
+            ambient_c = temp_obj.get("ambient")
+            battery = data.get("battery")
+            device_id = data.get("id", mac)
+            return BLEProbeReading(
+                internal_temp_c=float(internal_c),
+                ambient_temp_c=float(ambient_c) if ambient_c is not None else None,
+                mac_address=str(device_id),
+                probe_name="MEATER (Cloud)",
+                battery_pct=int(battery) if battery is not None else None,
+                protocol=BLEProbeProtocol.MEATER,
+            )
+        except Exception:
+            return None
+
+    @staticmethod
     def decode_sig_environmental(payload: bytes, mac: str = "") -> BLEProbeReading | None:
         """
         Decodes Bluetooth SIG Environmental Sensing (UUID 0x181A / 0x2A6E).

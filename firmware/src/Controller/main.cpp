@@ -10,6 +10,8 @@
 #include "../Adapters/Actuators/ESP32ServoDamperAdapter.hpp"
 #include "../Adapters/Sensors/MAX31855SensorAdapter.hpp"
 #include "../Adapters/Sensors/BLEProbeAdapter.hpp"
+#include "../Adapters/Sensors/MeaterBleClientAdapter.hpp"
+#include "../Adapters/Sensors/MeaterCloudAdapter.hpp"
 #include "../Adapters/Sensors/CompositeSensorAdapter.hpp"
 #include "../Adapters/Telemetry/SerialTelemetryAdapter.hpp"
 #include "../Adapters/Network/WebServerAdapter.hpp"
@@ -31,7 +33,14 @@ static Adapters::Actuators::ESP32PWMBlowerAdapter blowerAdapter(PIN_BLOWER_PWM, 
 static Adapters::Actuators::ESP32ServoDamperAdapter damperAdapter(PIN_SERVO_PWM, 1);
 static Adapters::Sensors::MAX31855SensorAdapter wiredSensorAdapter(PIN_CS_PIT, PIN_CS_FOOD1, PIN_SPI_SCK, PIN_SPI_MISO);
 static Adapters::Sensors::BLEProbeAdapter bleProbeAdapter(30000);
-static Adapters::Sensors::CompositeSensorAdapter compositeSensorAdapter(wiredSensorAdapter, &bleProbeAdapter);
+static Adapters::Sensors::MeaterBleClientAdapter meaterDirectAdapter(30000);
+static Adapters::Sensors::MeaterCloudAdapter meaterCloudAdapter(60000, 20000);
+static Adapters::Sensors::CompositeSensorAdapter compositeSensorAdapter(
+    wiredSensorAdapter,
+    &bleProbeAdapter,
+    &meaterDirectAdapter,
+    &meaterCloudAdapter
+);
 static Adapters::Telemetry::SerialTelemetryAdapter telemetryAdapter;
 static Adapters::Storage::ESP32NVSConfigAdapter storageAdapter("smoker_cfg");
 
@@ -78,7 +87,16 @@ void setup() {
     damperAdapter.begin();
     wiredSensorAdapter.begin();
     bleProbeAdapter.begin();
+    meaterDirectAdapter.begin();
     webServerAdapter.begin("SmokerController", "smoker123");
+
+    // Sync composite meat probe mode with loaded configuration
+    const auto& initial_cfg = controlService.config();
+    compositeSensorAdapter.setMode(initial_cfg.meat_probe_mode);
+    meaterDirectAdapter.setTargetMac(initial_cfg.meater_mac_filter);
+    meaterDirectAdapter.setEnabled(initial_cfg.meat_probe_mode == Domain::MeatProbeMode::MeaterBleDirect);
+    meaterCloudAdapter.setApiToken(initial_cfg.meater_cloud_token);
+    meaterCloudAdapter.setEnabled(initial_cfg.meat_probe_mode == Domain::MeatProbeMode::MeaterCloud);
 
     Serial.println("[Init] Hardware and Network Adapters initialized successfully.");
     Serial.printf("[Init] Default target setpoint: %.1f F\n", controlService.setpoint());
@@ -98,10 +116,19 @@ void setup() {
 }
 
 void loop() {
-    // Core 0 loop: Housekeeping, Web Requests & Servo Idle-Detach check
+    uint32_t now = millis();
+    // Core 0 loop: Housekeeping, Web Requests, BLE/Cloud polling & Servo Idle-Detach check
     webServerAdapter.update();
-    bleProbeAdapter.update(millis());
-    damperAdapter.update(millis());
+    bleProbeAdapter.update(now);
+    meaterDirectAdapter.update(now);
+    meaterCloudAdapter.update(now);
+    damperAdapter.update(now);
+
+    // Keep active sensor routing synced with live config
+    const auto& cfg = controlService.config();
+    compositeSensorAdapter.setMode(cfg.meat_probe_mode);
+    meaterDirectAdapter.setEnabled(cfg.meat_probe_mode == Domain::MeatProbeMode::MeaterBleDirect);
+    meaterCloudAdapter.setEnabled(cfg.meat_probe_mode == Domain::MeatProbeMode::MeaterCloud);
     delay(10);
 }
 
@@ -111,6 +138,7 @@ void loop() {
 int main() {
     std::cout << "ESP32 Smoker Controller — Native Host Build\n";
     bleProbeAdapter.begin();
+    meaterDirectAdapter.begin();
     webServerAdapter.begin();
     webServerAdapter.update();
     std::cout << "Native Host initialization verified cleanly.\n";

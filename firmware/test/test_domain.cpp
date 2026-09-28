@@ -12,6 +12,8 @@
 #include "../src/Domain/Temperature.hpp"
 #include "../src/Adapters/Sensors/MAX31855SensorAdapter.hpp"
 #include "../src/Adapters/Sensors/BLEProbeAdapter.hpp"
+#include "../src/Adapters/Sensors/MeaterBleClientAdapter.hpp"
+#include "../src/Adapters/Sensors/MeaterCloudAdapter.hpp"
 #include "../src/Adapters/Sensors/CompositeSensorAdapter.hpp"
 #include "../src/Adapters/Network/WebServerAdapter.hpp"
 #include "../src/Adapters/Storage/ESP32NVSConfigAdapter.hpp"
@@ -442,6 +444,104 @@ static int testCompositeSensor() {
     return 0;
 }
 
+static int testMeaterGattAndCloudDecoding() {
+    // 1. Test MEATER GATT Characteristic payload
+    // Tip raw = 872 (0x0368 little endian) -> (872 + 8) / 16 = 55.0°C
+    // ra = 1200, oa = 30 -> min_oa = 30 -> diff = 1170 -> amb_adj = (1170 * 16 * 589) / 1487 = 7413 -> amb = (872 + 7413 + 8) / 16 = 518.3°C
+    // Let's use realistic ambient bytes:
+    // ra = 200 (0x00C8), oa = 48 (0x0030) -> diff = 152 -> amb_adj = (152 * 16 * 589) / 1487 = 964 -> amb = (872 + 964 + 8) / 16 = 115.25°C
+    const uint8_t meater_gatt[] = {
+        0x68, 0x03, // tip = 872 (55.0°C)
+        0xC8, 0x00, // ra = 200
+        0x30, 0x00, // oa = 48
+        0x00, 0x58  // battery = 88%
+    };
+
+    Domain::BLEProbeReading gatt_reading{};
+    bool ok_gatt = Domain::BLEAdvertisementDecoder::decodeMeaterGatt(meater_gatt, sizeof(meater_gatt), gatt_reading);
+    TEST_ASSERT(ok_gatt, "GATT decoder must decode valid MEATER payload");
+    TEST_ASSERT(std::abs(gatt_reading.internal_temp_c - 55.0f) < 0.1f, "Tip temp must decode to 55.0C");
+    TEST_ASSERT(std::abs(gatt_reading.internalFahrenheit() - 131.0f) < 0.2f, "131F internal temp");
+    TEST_ASSERT(gatt_reading.has_ambient, "Ambient temp must be flagged present");
+    TEST_ASSERT(std::abs(gatt_reading.ambient_temp_c - 115.25f) < 0.2f, "Ambient must decode correctly");
+    TEST_ASSERT(gatt_reading.battery_pct == 88, "Battery must be 88%");
+    TEST_ASSERT(std::string(gatt_reading.probe_name).find("MEATER") != std::string::npos, "Probe name must mention MEATER");
+
+    // 2. Test MEATER Cloud JSON payload
+    const char* cloud_json = "{\"data\":{\"devices\":[{\"id\":\"m_probe_1\",\"temperature\":{\"internal\":57.5,\"ambient\":110.0},\"battery\":95}]}}";
+    Domain::BLEProbeReading cloud_reading{};
+    bool ok_cloud = Domain::BLEAdvertisementDecoder::decodeMeaterCloudJson(cloud_json, cloud_reading);
+    TEST_ASSERT(ok_cloud, "Cloud JSON decoder must decode valid MEATER Cloud payload");
+    TEST_ASSERT(std::abs(cloud_reading.internal_temp_c - 57.5f) < 0.1f, "Internal must be 57.5C");
+    TEST_ASSERT(cloud_reading.has_ambient, "Ambient must be present");
+    TEST_ASSERT(std::abs(cloud_reading.ambient_temp_c - 110.0f) < 0.1f, "Ambient must be 110.0C");
+    TEST_ASSERT(cloud_reading.battery_pct == 95, "Battery must be 95%");
+
+    std::cout << "  [PASS] testMeaterGattAndCloudDecoding\n";
+    return 0;
+}
+
+static int testMeaterAdaptersAndMultiModeRouting() {
+    MockSensor wired;
+    Adapters::Sensors::BLEProbeAdapter blePassive(30000);
+    Adapters::Sensors::MeaterBleClientAdapter meaterDirect(30000);
+    Adapters::Sensors::MeaterCloudAdapter meaterCloud(60000);
+
+    Adapters::Sensors::CompositeSensorAdapter composite(
+        wired,
+        &blePassive,
+        &meaterDirect,
+        &meaterCloud
+    );
+
+    wired.reading = Domain::TemperatureReading::fromFahrenheit(225.0f, Domain::SensorRole::Pit, 1000);
+
+    // Setup mock packets:
+    // 1. Passive BLE: 50.0°C (122.0°F)
+    const uint8_t inkbird[] = {0x00, 0x00, 0xF4, 0x01, 0x50}; // 500 = 50.0°C
+    blePassive.processAdvertisement(inkbird, sizeof(inkbird), "11:22:33:44:55:66", 1000);
+    blePassive.setMockTime(1500);
+
+    // 2. Meater Direct: 55.0°C (131.0°F)
+    const uint8_t meater_raw[] = {0x68, 0x03, 0xC8, 0x00, 0x30, 0x00, 0x00, 0x55};
+    meaterDirect.processGattPayload(meater_raw, sizeof(meater_raw), 1000);
+    meaterDirect.setMockTime(1500);
+
+    // 3. Meater Cloud: 60.0°C (140.0°F)
+    const char* cloud_json = "{\"internal\":60.0,\"ambient\":120.0,\"battery\":90}";
+    meaterCloud.processCloudJson(cloud_json, 1000);
+    meaterCloud.setMockTime(1500);
+
+    // Test Mode 1: PassiveBle
+    composite.setMode(Domain::MeatProbeMode::PassiveBle);
+    auto r_passive = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(std::abs(r_passive.celsius - 50.0f) < 0.1f, "Mode PassiveBle must return passive probe reading 50.0C");
+
+    // Test Mode 2: MeaterBleDirect
+    composite.setMode(Domain::MeatProbeMode::MeaterBleDirect);
+    auto r_direct = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(std::abs(r_direct.celsius - 55.0f) < 0.1f, "Mode MeaterBleDirect must return direct probe reading 55.0C");
+
+    // Test Mode 3: MeaterCloud
+    composite.setMode(Domain::MeatProbeMode::MeaterCloud);
+    auto r_cloud = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(std::abs(r_cloud.celsius - 60.0f) < 0.1f, "Mode MeaterCloud must return cloud reading 60.0C");
+
+    // Test Mode 0: WiredOnly
+    composite.setMode(Domain::MeatProbeMode::WiredOnly);
+    auto r_wired = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(!r_wired.is_wireless, "Mode WiredOnly must bypass all wireless adapters");
+
+    // Test Disconnect / Fallback: If MeaterDirect times out, fallback to wired
+    composite.setMode(Domain::MeatProbeMode::MeaterBleDirect);
+    meaterDirect.setMockTime(40000); // Exceeded 30s timeout
+    auto r_fb = composite.readTemperature(Domain::SensorRole::Food1);
+    TEST_ASSERT(!r_fb.is_wireless, "Stale MeaterDirect must fallback to wired sensor");
+
+    std::cout << "  [PASS] testMeaterAdaptersAndMultiModeRouting\n";
+    return 0;
+}
+
 int main() {
     std::cout << "Running C++ Domain & Service Test Suite...\n";
     if (testTemperatureDomain() != 0) return 1;
@@ -455,7 +555,9 @@ int main() {
     if (testBLEDecoder() != 0) return 1;
     if (testBLEProbeAdapter() != 0) return 1;
     if (testCompositeSensor() != 0) return 1;
+    if (testMeaterGattAndCloudDecoding() != 0) return 1;
+    if (testMeaterAdaptersAndMultiModeRouting() != 0) return 1;
 
-    std::cout << "\nALL 11 C++ TEST SUITES PASSED CLEANLY!\n";
+    std::cout << "\nALL 13 C++ TEST SUITES PASSED CLEANLY!\n";
     return 0;
 }

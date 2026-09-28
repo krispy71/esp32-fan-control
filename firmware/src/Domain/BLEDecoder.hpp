@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
+#include <algorithm>
 #include "Temperature.hpp"
 
 namespace SmokerController::Domain {
@@ -99,6 +101,71 @@ public:
         }
         out.protocol = BLEProbeProtocol::Meater;
         std::strncpy(out.probe_name, "MEATER Probe", sizeof(out.probe_name) - 1);
+        return true;
+    }
+
+    static bool decodeMeaterGatt(const uint8_t* payload, size_t length, BLEProbeReading& out) noexcept {
+        if (!payload || length < 2) return false;
+        // MEATER characteristic 7EDDA774-045E-4BBF-909B-45D1991A2876
+        // Bytes 0-1: tip raw (little-endian)
+        uint16_t tip_raw = static_cast<uint16_t>(payload[0] | (payload[1] << 8));
+        float tip_c = (static_cast<float>(tip_raw) + 8.0f) / 16.0f;
+        if (tip_c < -20.0f || tip_c > 125.0f) return false;
+
+        out.internal_temp_c = tip_c;
+        out.protocol = BLEProbeProtocol::Meater;
+        std::strncpy(out.probe_name, "MEATER (Direct)", sizeof(out.probe_name) - 1);
+        out.probe_name[sizeof(out.probe_name) - 1] = '\0';
+
+        if (length >= 6) {
+            uint16_t ra = static_cast<uint16_t>(payload[2] | (payload[3] << 8));
+            uint16_t oa = static_cast<uint16_t>(payload[4] | (payload[5] << 8));
+            int32_t min_oa = (oa < 48) ? oa : 48;
+            int32_t diff = static_cast<int32_t>(ra) - min_oa;
+            if (diff < 0) diff = 0;
+            int32_t amb_adj = (diff * 16 * 589) / 1487;
+            float amb_c = (static_cast<float>(tip_raw + amb_adj) + 8.0f) / 16.0f;
+            if (amb_c >= -20.0f && amb_c <= 350.0f) {
+                out.ambient_temp_c = amb_c;
+                out.has_ambient = true;
+            }
+        }
+        if (length >= 8) {
+            if (payload[7] <= 100) {
+                out.battery_pct = static_cast<int8_t>(payload[7]);
+            }
+        }
+        return true;
+    }
+
+    static bool decodeMeaterCloudJson(const char* json_str, BLEProbeReading& out) noexcept {
+        if (!json_str) return false;
+        const char* p_int = std::strstr(json_str, "\"internal\":");
+        if (!p_int) return false;
+        float internal_c = 0.0f;
+        if (std::sscanf(p_int + 11, "%f", &internal_c) != 1) return false;
+
+        out.internal_temp_c = internal_c;
+        out.protocol = BLEProbeProtocol::Meater;
+        std::strncpy(out.probe_name, "MEATER (Cloud)", sizeof(out.probe_name) - 1);
+        out.probe_name[sizeof(out.probe_name) - 1] = '\0';
+
+        const char* p_amb = std::strstr(json_str, "\"ambient\":");
+        if (p_amb) {
+            float amb_c = 0.0f;
+            if (std::sscanf(p_amb + 10, "%f", &amb_c) == 1) {
+                out.ambient_temp_c = amb_c;
+                out.has_ambient = true;
+            }
+        }
+
+        const char* p_bat = std::strstr(json_str, "\"battery\":");
+        if (p_bat) {
+            int bat = -1;
+            if (std::sscanf(p_bat + 10, "%d", &bat) == 1 && bat >= 0 && bat <= 100) {
+                out.battery_pct = static_cast<int8_t>(bat);
+            }
+        }
         return true;
     }
 

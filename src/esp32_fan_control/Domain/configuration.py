@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class MeatProbeMode(str, Enum):
+    WIRED_ONLY = "wired"
+    PASSIVE_BLE = "passive_ble"
+    MEATER_BLE_DIRECT = "meater_direct"
+    MEATER_CLOUD = "meater_cloud"
 
 
 @dataclass(frozen=True)
@@ -18,6 +26,9 @@ class SmokerConfig:
     airflow_threshold_pct: float = 40.0
     lid_drop_threshold_deg: float = 15.0
     lid_pause_duration_s: float = 180.0
+    meat_probe_mode: MeatProbeMode = MeatProbeMode.PASSIVE_BLE
+    meater_cloud_token: str = ""
+    meater_mac_filter: str = ""
 
     def __post_init__(self) -> None:
         if not (100.0 <= self.setpoint_f <= 450.0):

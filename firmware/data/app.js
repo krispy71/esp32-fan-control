@@ -117,8 +117,11 @@
       elFoodStatusDot.title = meatValid ? 'Food Probe Connected' : 'Food Probe Disconnected';
     }
     if (elFoodSourceBadge) {
-      if (snapshot.is_meat_wireless) {
+      if (snapshot.is_meat_wireless && snapshot.is_meat_valid) {
         elFoodSourceBadge.textContent = snapshot.meat_probe_name || 'BLE';
+        elFoodSourceBadge.style.display = 'inline-flex';
+      } else if (meatValid) {
+        elFoodSourceBadge.textContent = 'Wired';
         elFoodSourceBadge.style.display = 'inline-flex';
       } else {
         elFoodSourceBadge.style.display = 'none';
@@ -509,6 +512,14 @@
       });
   };
 
+  window.onMeatModeChange = function (val) {
+    const mode = parseInt(val, 10);
+    const elCloud = document.getElementById('meater-cloud-group');
+    const elMac = document.getElementById('meater-mac-group');
+    if (elCloud) elCloud.style.display = (mode === 3) ? 'block' : 'none';
+    if (elMac) elMac.style.display = (mode === 2) ? 'block' : 'none';
+  };
+
   function fetchConfig() {
     fetch('/api/config')
       .then((res) => {
@@ -520,10 +531,20 @@
         const elKi = document.getElementById('cfg-ki');
         const elKd = document.getElementById('cfg-kd');
         const elThresh = document.getElementById('cfg-threshold');
+        const elMeatMode = document.getElementById('cfg-meat-mode');
+        const elMeaterToken = document.getElementById('cfg-meater-token');
+        const elMeaterMac = document.getElementById('cfg-meater-mac');
+
         if (elKp && cfg.pid_kp !== undefined) elKp.value = cfg.pid_kp;
         if (elKi && cfg.pid_ki !== undefined) elKi.value = cfg.pid_ki;
         if (elKd && cfg.pid_kd !== undefined) elKd.value = cfg.pid_kd;
         if (elThresh && cfg.airflow_threshold_pct !== undefined) elThresh.value = cfg.airflow_threshold_pct;
+        if (elMeatMode && cfg.meat_probe_mode !== undefined) {
+          elMeatMode.value = cfg.meat_probe_mode;
+          window.onMeatModeChange(cfg.meat_probe_mode);
+        }
+        if (elMeaterToken && cfg.meater_cloud_token !== undefined) elMeaterToken.value = cfg.meater_cloud_token;
+        if (elMeaterMac && cfg.meater_mac_filter !== undefined) elMeaterMac.value = cfg.meater_mac_filter;
       })
       .catch((err) => {
         console.warn('Could not load config:', err);
@@ -535,12 +556,18 @@
     const elKi = document.getElementById('cfg-ki');
     const elKd = document.getElementById('cfg-kd');
     const elThresh = document.getElementById('cfg-threshold');
+    const elMeatMode = document.getElementById('cfg-meat-mode');
+    const elMeaterToken = document.getElementById('cfg-meater-token');
+    const elMeaterMac = document.getElementById('cfg-meater-mac');
     const msg = document.getElementById('save-msg');
 
     const kp = parseFloat(elKp ? elKp.value : 3.0);
     const ki = parseFloat(elKi ? elKi.value : 0.02);
     const kd = parseFloat(elKd ? elKd.value : 15.0);
     const thresh = parseFloat(elThresh ? elThresh.value : 40.0);
+    const meatMode = parseInt(elMeatMode ? elMeatMode.value : '1', 10);
+    const meaterToken = elMeaterToken ? elMeaterToken.value.trim() : '';
+    const meaterMac = elMeaterMac ? elMeaterMac.value.trim() : '';
 
     fetch('/api/config', {
       method: 'POST',
@@ -549,7 +576,10 @@
         pid_kp: kp,
         pid_ki: ki,
         pid_kd: kd,
-        airflow_threshold_pct: thresh
+        airflow_threshold_pct: thresh,
+        meat_probe_mode: meatMode,
+        meater_cloud_token: meaterToken,
+        meater_mac_filter: meaterMac
       })
     })
       .then((res) => {

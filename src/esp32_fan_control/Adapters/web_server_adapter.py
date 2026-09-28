@@ -210,6 +210,16 @@ class WebServerAdapter:
 
             def _handle_get_config(self) -> None:
                 cfg = adapter._service.config
+                from esp32_fan_control.Domain.configuration import MeatProbeMode
+                mode_num = 1
+                if cfg.meat_probe_mode == MeatProbeMode.WIRED_ONLY:
+                    mode_num = 0
+                elif cfg.meat_probe_mode == MeatProbeMode.PASSIVE_BLE:
+                    mode_num = 1
+                elif cfg.meat_probe_mode == MeatProbeMode.MEATER_BLE_DIRECT:
+                    mode_num = 2
+                elif cfg.meat_probe_mode == MeatProbeMode.MEATER_CLOUD:
+                    mode_num = 3
                 data = {
                     "setpoint_f": cfg.setpoint_f,
                     "pid_kp": cfg.pid_kp,
@@ -218,6 +228,9 @@ class WebServerAdapter:
                     "airflow_threshold_pct": cfg.airflow_threshold_pct,
                     "lid_drop_threshold_deg": cfg.lid_drop_threshold_deg,
                     "lid_pause_duration_s": cfg.lid_pause_duration_s,
+                    "meat_probe_mode": mode_num,
+                    "meater_cloud_token": cfg.meater_cloud_token,
+                    "meater_mac_filter": cfg.meater_mac_filter,
                 }
                 payload = json.dumps(data).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
@@ -232,8 +245,23 @@ class WebServerAdapter:
                 raw_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
                 try:
                     body = json.loads(raw_body.decode("utf-8"))
-                    from esp32_fan_control.Domain.configuration import SmokerConfig
+                    from esp32_fan_control.Domain.configuration import MeatProbeMode, SmokerConfig
                     curr = adapter._service.config
+                    raw_mode = body.get("meat_probe_mode")
+                    mode = curr.meat_probe_mode
+                    if raw_mode is not None:
+                        try:
+                            m_int = int(raw_mode)
+                            if m_int == 0:
+                                mode = MeatProbeMode.WIRED_ONLY
+                            elif m_int == 1:
+                                mode = MeatProbeMode.PASSIVE_BLE
+                            elif m_int == 2:
+                                mode = MeatProbeMode.MEATER_BLE_DIRECT
+                            elif m_int == 3:
+                                mode = MeatProbeMode.MEATER_CLOUD
+                        except ValueError:
+                            pass
                     new_cfg = SmokerConfig(
                         setpoint_f=float(body.get("setpoint_f", curr.setpoint_f)),
                         pid_kp=float(body.get("pid_kp", curr.pid_kp)),
@@ -242,6 +270,9 @@ class WebServerAdapter:
                         airflow_threshold_pct=float(body.get("airflow_threshold_pct", curr.airflow_threshold_pct)),
                         lid_drop_threshold_deg=float(body.get("lid_drop_threshold_deg", curr.lid_drop_threshold_deg)),
                         lid_pause_duration_s=float(body.get("lid_pause_duration_s", curr.lid_pause_duration_s)),
+                        meat_probe_mode=mode,
+                        meater_cloud_token=str(body.get("meater_cloud_token", curr.meater_cloud_token)),
+                        meater_mac_filter=str(body.get("meater_mac_filter", curr.meater_mac_filter)),
                     )
                     adapter._service.update_config(new_cfg)
                     resp = json.dumps({"status": "ok", "config": body}).encode("utf-8")

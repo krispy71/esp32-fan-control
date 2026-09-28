@@ -476,7 +476,8 @@ canvas {
   color: var(--text-secondary);
 }
 
-.setting-item input {
+.setting-item input,
+.setting-item select {
   background-color: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -484,6 +485,10 @@ canvas {
   font-family: var(--font-mono);
   font-size: 0.95rem;
   padding: 8px 10px;
+}
+
+.setting-wide {
+  grid-column: 1 / -1;
 }
 
 .setting-actions {

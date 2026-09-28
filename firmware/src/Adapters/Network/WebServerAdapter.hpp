@@ -114,7 +114,7 @@ public:
         });
 
         server_.on("/api/config", HTTP_GET, [this]() {
-            char json_buf[384];
+            char json_buf[512];
             formatConfigJson(json_buf, sizeof(json_buf));
             server_.send(200, "application/json", json_buf);
         });
@@ -138,6 +138,34 @@ public:
             if (idx_th >= 0) cfg.airflow_threshold_pct = body.substring(idx_th + 24).toFloat();
             int idx_ld = body.indexOf("\"lid_drop_threshold_deg\":");
             if (idx_ld >= 0) cfg.lid_drop_threshold_deg = body.substring(idx_ld + 25).toFloat();
+            int idx_pm = body.indexOf("\"meat_probe_mode\":");
+            if (idx_pm >= 0) cfg.meat_probe_mode = static_cast<Domain::MeatProbeMode>(body.substring(idx_pm + 18).toInt());
+
+            int idx_tok = body.indexOf("\"meater_cloud_token\":");
+            if (idx_tok >= 0) {
+                int start_q = body.indexOf('"', idx_tok + 21);
+                if (start_q >= 0) {
+                    int end_q = body.indexOf('"', start_q + 1);
+                    if (end_q >= 0) {
+                        String tok = body.substring(start_q + 1, end_q);
+                        std::strncpy(cfg.meater_cloud_token, tok.c_str(), sizeof(cfg.meater_cloud_token) - 1);
+                        cfg.meater_cloud_token[sizeof(cfg.meater_cloud_token) - 1] = '\0';
+                    }
+                }
+            }
+
+            int idx_mac = body.indexOf("\"meater_mac_filter\":");
+            if (idx_mac >= 0) {
+                int start_q = body.indexOf('"', idx_mac + 20);
+                if (start_q >= 0) {
+                    int end_q = body.indexOf('"', start_q + 1);
+                    if (end_q >= 0) {
+                        String mac = body.substring(start_q + 1, end_q);
+                        std::strncpy(cfg.meater_mac_filter, mac.c_str(), sizeof(cfg.meater_mac_filter) - 1);
+                        cfg.meater_mac_filter[sizeof(cfg.meater_mac_filter) - 1] = '\0';
+                    }
+                }
+            }
 
             if (cfg.isValid()) {
                 service_.updateConfig(cfg);
@@ -206,14 +234,20 @@ public:
             "\"pid_kd\":%.2f,"
             "\"airflow_threshold_pct\":%.1f,"
             "\"lid_drop_threshold_deg\":%.1f,"
-            "\"lid_pause_duration_ms\":%u}",
+            "\"lid_pause_duration_ms\":%u,"
+            "\"meat_probe_mode\":%u,"
+            "\"meater_cloud_token\":\"%s\","
+            "\"meater_mac_filter\":\"%s\"}",
             cfg.setpoint_f,
             cfg.pid_kp,
             cfg.pid_ki,
             cfg.pid_kd,
             cfg.airflow_threshold_pct,
             cfg.lid_drop_threshold_deg,
-            cfg.lid_pause_duration_ms
+            cfg.lid_pause_duration_ms,
+            static_cast<unsigned int>(cfg.meat_probe_mode),
+            cfg.meater_cloud_token,
+            cfg.meater_mac_filter
         );
     }
 
