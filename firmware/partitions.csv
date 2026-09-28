@@ -1,0 +1,10 @@
+# ESP32 Smoker Controller Partition Table
+# 4MB (0x400000) Flash Memory Layout:
+# - Single large application partition (2.5 MB) to accommodate Wi-Fi, BLE, and FreeRTOS
+# - LittleFS file system partition (1.44 MB) for web dashboard assets and logging
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  factory, 0x10000, 0x280000,
+spiffs,   data, spiffs,  0x290000, 0x170000,
