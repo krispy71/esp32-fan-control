@@ -2,9 +2,13 @@
 
 This directory contains the 3D-printable mechanical CAD design for the ESP32 Smoker Controller, implemented in OpenSCAD.
 
-> **Assembly Guide**: For full step-by-step mechanical fastener assembly, see [docs/assembly-guide.md](../docs/assembly-guide.md).
+> **Mechanical Guides**:
+> - **Design 1 (Integrated Barrel Damper Pod)**: See [docs/assembly-guide.md](../docs/assembly-guide.md) and [docs/3d-printed-parts-guide.md](../docs/3d-printed-parts-guide.md).
+> - **Design 2 (Roto-Damper RD3 Rotary Puck)**: See [docs/roto-damper-guide.md](../docs/roto-damper-guide.md).
 
-![Exploded Assembly Diagram](parts_assembly_diagram.jpg)
+| Design 1: Integrated Barrel Damper Pod | Design 2: Roto-Damper RD3 Rotary Puck |
+| :---: | :---: |
+| [![Design 1 Exploded Diagram](parts_assembly_diagram.jpg)](parts_assembly_diagram.jpg) | [![Design 2 Exploded Diagram](rotodamper_assembly_diagram.jpg)](rotodamper_assembly_diagram.jpg) |
 
 ---
 
@@ -75,16 +79,40 @@ openscad -o lid.stl -D 'part="lid"' smoker_damper.scad
 openscad -o fan_cover.stl -D 'part="fan_cover"' smoker_damper.scad
 ```
 
-Pre-compiled binary STL files ready for slicing are also available in `cad/stl/`.
+---
+
+## Printable Parts in `roto_damper.scad` (Design 2: Roto-Damper)
+
+Compile the modular 4-piece Roto-Damper puck:
+
+```bash
+# 1. Base Housing (lower shell, 5015 fan bay, static lower plenum, sector deck)
+openscad -o rotodamper_base.stl -D 'part="base"' roto_damper.scad
+
+# 2. Rotary Damper Disc (80-degree sector aperture, low-friction rim, servo hub)
+openscad -o rotodamper_disc.stl -D 'part="disc"' roto_damper.scad
+
+# 3. Cap Housing (upper plenum, 31.5mm BBQ Guru nozzle, MG90S bay, RJ45 port)
+openscad -o rotodamper_cap.stl -D 'part="cap"' roto_damper.scad
+
+# 4. Fan Cover (bottom intake grille with aerodynamic louvers)
+openscad -o rotodamper_fan_cover.stl -D 'part="fan_cover"' roto_damper.scad
+```
+
+Pre-compiled binary STL files ready for slicing are available in `cad/stl/`.
 
 ---
 
 ## Assembly Diagram Generation
 
-The technical exploded assembly diagram (`parts_assembly_diagram.jpg`) is generated directly from the 3D meshes in `cad/stl/`:
+The technical exploded assembly diagrams (`parts_assembly_diagram.jpg` and `rotodamper_assembly_diagram.jpg`) are generated directly from the 3D meshes in `cad/stl/`:
 
 ```bash
+# Design 1 (Barrel Damper Pod) Assembly Diagram:
 uv run --with numpy-stl --with matplotlib --with pillow python cad/render_assembly_diagram.py
+
+# Design 2 (Roto-Damper RD3 Rotary Puck) Assembly Diagram:
+uv run --with numpy-stl --with matplotlib --with pillow python cad/render_rotodamper_assembly.py
 ```
 
 ---
