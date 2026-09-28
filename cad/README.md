@@ -79,6 +79,16 @@ Pre-compiled binary STL files ready for slicing are also available in `cad/stl/`
 
 ---
 
+## Assembly Diagram Generation
+
+The technical exploded assembly diagram (`parts_assembly_diagram.jpg`) is generated directly from the 3D meshes in `cad/stl/`:
+
+```bash
+uv run --with numpy-stl --with matplotlib --with pillow python cad/render_assembly_diagram.py
+```
+
+---
+
 ## 3D Printing Recommendations
 
 * **Material**: **PETG**, **ABS**, or **ASA** are strongly recommended. PLA is **not** recommended due to radiant heat near smoker firebox vents ($>60^\circ\text{C}$).
