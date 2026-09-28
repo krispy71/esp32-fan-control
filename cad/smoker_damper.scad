@@ -50,6 +50,23 @@ servo_h = 24.5;
 servo_flange_l = 32.5;
 servo_shaft_offset = 6.0;
 
+// Derived Geometric Reference Coordinates
+dc_x = (fan_size + 2*wall)/2; // Center X of blower & damper (27.4mm)
+dc_y = fan_size + wall + 25 + damper_d/2; // Center Y of damper bore (91.4mm)
+dc_z = (fan_depth + wall)/2; // Center Z of damper bore (8.7mm)
+
+div_wall_inner_x = dc_x + damper_len/2; // Inner face of right dividing wall (43.4mm)
+div_wall_outer_x = div_wall_inner_x + wall; // Outer face / servo mounting face (45.8mm)
+sleeve_left_x = dc_x - (damper_len/2 + wall); // Left outer face of damper sleeve (9.0mm)
+
+// Damper Rotor Dimensions
+rotor_barrel_dia = damper_d - 2*rotor_clearance; // 27.1mm
+rotor_flange_d = damper_d + 2.0; // 30.0mm (clears output boss at Y=106.8)
+rotor_flange_t = 2.5;
+rotor_len_left = (damper_len + 2*wall)/2; // 18.4mm (reaches from throat center to sleeve left face)
+rotor_len_right = damper_len/2 - 0.5; // 15.5mm (leaves 0.5mm axial clearance at dividing wall)
+rotor_barrel_len = rotor_len_left + rotor_len_right; // 33.9mm
+
 /* [Smoker Output Connection] */
 // Preset smoker interface adapter
 output_preset = "bbq_guru"; // [bbq_guru: BBQ Guru Vision Pro / Pit Viper Port (1.25" / 31.5mm with O-Ring), custom_round: Custom Round Pipe, custom_rect: Custom Rectangular Duct, npt_1: 1" NPT Pipe (25.4mm), npt_1_5: 1.5" Pipe (38.1mm), kamado_rect: Kamado Slide Door]
@@ -160,16 +177,16 @@ module main_housing() {
                 cube([fan_size + 2*wall, fan_size + 2*wall, fan_depth + wall]);
 
             // Transition duct to damper
-            translate([(fan_size + 2*wall - fan_throat_w - 2*wall)/2, fan_size + wall, 0])
-                cube([fan_throat_w + 2*wall, 25, fan_depth + wall]);
+            translate([(fan_size + 2*wall - fan_throat_w - 2*wall)/2, fan_size + wall - 1, 0])
+                cube([fan_throat_w + 2*wall, 27, fan_depth + wall]);
 
             // Cylindrical damper housing sleeve
-            translate([(fan_size + 2*wall)/2, fan_size + wall + 25 + damper_d/2, (fan_depth + wall)/2])
+            translate([dc_x, dc_y, dc_z])
                 rotate([0, 90, 0])
                 cylinder(d=damper_d + 2*wall, h=damper_len + 2*wall, center=true);
 
-            // Servo mounting bracket tower
-            translate([(fan_size + 2*wall)/2 + (damper_len/2) + wall, fan_size + wall + 25 + damper_d/2, 0])
+            // Servo mounting bracket body
+            translate([div_wall_outer_x, dc_y, 0])
                 servo_bracket_body();
 
             // Output adapter mounting boss (modular 4-bolt flange face)
@@ -206,27 +223,32 @@ module main_housing() {
         translate([(fan_size + 2*wall - fan_throat_w)/2, wall + fan_size - 1, wall + (fan_depth - fan_throat_h)/2])
             cube([fan_throat_w, 28, fan_throat_h]);
 
-        // Cylindrical damper bore for rotor
-        translate([(fan_size + 2*wall)/2, fan_size + wall + 25 + damper_d/2, (fan_depth + wall)/2])
+        // Open cylindrical damper rotor bore (inserted from left face through to right dividing wall)
+        translate([div_wall_inner_x, dc_y, dc_z])
+            rotate([0, -90, 0])
+            cylinder(d=damper_d, h=div_wall_inner_x - sleeve_left_x + 5);
+
+        // Clearance hole through dividing wall for servo collar
+        translate([div_wall_inner_x - 1, dc_y, dc_z])
             rotate([0, 90, 0])
-            cylinder(d=damper_d, h=damper_len + 0.2, center=true);
+            cylinder(d=12.5, h=wall + 3);
 
         // Airway outlet from damper to smoker
-        translate([(fan_size + 2*wall - fan_throat_w)/2, fan_size + wall + 25 + damper_d/2, wall + (fan_depth - fan_throat_h)/2])
+        translate([(fan_size + 2*wall - fan_throat_w)/2, dc_y, wall + (fan_depth - fan_throat_h)/2])
             cube([fan_throat_w, damper_d/2 + wall + 10, fan_throat_h]);
 
         // Servo cutout & screw holes in servo bracket
-        translate([(fan_size + 2*wall)/2 + (damper_len/2) + wall, fan_size + wall + 25 + damper_d/2, 0])
+        translate([div_wall_outer_x, dc_y, 0])
             servo_bracket_cutouts();
 
         // 4x M3 mounting holes for modular output nozzle adapter
-        translate([(fan_size + 2*wall)/2 - 14, fan_size + wall + 25 + damper_d + wall + 4, (fan_depth + wall)/2 - 8])
+        translate([dc_x - 14, fan_size + wall + 25 + damper_d + wall + 4, dc_z - 8])
             rotate([90, 0, 0]) cylinder(d=2.9, h=15, center=true);
-        translate([(fan_size + 2*wall)/2 + 14, fan_size + wall + 25 + damper_d + wall + 4, (fan_depth + wall)/2 - 8])
+        translate([dc_x + 14, fan_size + wall + 25 + damper_d + wall + 4, dc_z - 8])
             rotate([90, 0, 0]) cylinder(d=2.9, h=15, center=true);
-        translate([(fan_size + 2*wall)/2 - 14, fan_size + wall + 25 + damper_d + wall + 4, (fan_depth + wall)/2 + 8])
+        translate([dc_x - 14, fan_size + wall + 25 + damper_d + wall + 4, dc_z + 8])
             rotate([90, 0, 0]) cylinder(d=2.9, h=15, center=true);
-        translate([(fan_size + 2*wall)/2 + 14, fan_size + wall + 25 + damper_d + wall + 4, (fan_depth + wall)/2 + 8])
+        translate([dc_x + 14, fan_size + wall + 25 + damper_d + wall + 4, dc_z + 8])
             rotate([90, 0, 0]) cylinder(d=2.9, h=15, center=true);
 
         // Cutout for RJ45 jack (Config B)
@@ -237,27 +259,33 @@ module main_housing() {
     }
 }
 
-// Servo bracket body and cutouts
+// Servo bracket body and cutouts (horizontal mounting along Y, spline axis along X)
 module servo_bracket_body() {
-    translate([0, -servo_w/2 - wall, 0])
-        cube([servo_l + 10, servo_w + 2*wall, fan_depth + wall]);
+    translate([-1.0, -20, 0])
+        cube([19.0, 32, fan_depth + wall]);
+    // Reinforcement gussets tying bracket to housing sleeve
+    translate([-12, -20, 0])
+        cube([12, 10, fan_depth + wall]);
+    translate([-12, 10, 0])
+        cube([12, 10, fan_depth + wall]);
 }
 
 module servo_bracket_cutouts() {
-    // Servo body cavity
-    translate([3, -servo_w/2, wall + (fan_depth - servo_h)/2])
-        cube([servo_l + 0.5, servo_w, servo_h + 10]);
+    // Servo body cavity (MG90S: 22.8mm x 12.0mm x 22.4mm)
+    translate([2.5, -17.5, dc_z - 6.5])
+        cube([22.0, 24.0, 13.0]);
 
-    // Servo shaft clearance opening into damper barrel
-    translate([-wall - 2, 0, (fan_depth + wall)/2])
+    // Cable exit channel towards rear
+    translate([2.5, -23, dc_z - 4])
+        cube([14.0, 8, 8]);
+
+    // Servo mounting ear screw pilot holes (28mm center-to-center spacing)
+    translate([-0.5, -20.0, dc_z])
         rotate([0, 90, 0])
-        cylinder(d=8.0, h=wall + 5);
-
-    // Servo mounting ear screw holes
-    translate([1.5, 0, (fan_depth + wall)/2 - 10])
-        rotate([0, 90, 0]) cylinder(d=2.2, h=25);
-    translate([1.5, 0, (fan_depth + wall)/2 + 10])
-        rotate([0, 90, 0]) cylinder(d=2.2, h=25);
+        cylinder(d=2.2, h=10);
+    translate([-0.5, 8.0, dc_z])
+        rotate([0, 90, 0])
+        cylinder(d=2.2, h=10);
 }
 
 // Integrated Electronics Bay (Config A)
@@ -290,33 +318,52 @@ module electronics_bay_body() {
 // ====================================================================
 // 2. DAMPER ROTOR (CYLINDRICAL BARREL APERTURE)
 // ====================================================================
+// Cylindrical rotating barrel inserted through the open left bore of the housing.
+// Features:
+//   - Precision 0.45mm radial clearance for smooth low-friction rotation
+//   - Outer retaining bezel flange with tactile knurling and position pointer
+//   - Drive-end recessed pocket for MG90S/SG90 servo horn arm (flush fit)
+//   - 5.5mm central axial screwdriver tunnel for tightening servo center screw
 module damper_rotor() {
-    r_dia = damper_d - 2*rotor_clearance;
-    r_len = damper_len - 1.0;
-
     difference() {
         union() {
-            // Main barrel cylinder
-            cylinder(d=r_dia, h=r_len, center=true);
+            // Main cylindrical rotor barrel
+            translate([0, 0, -rotor_len_left])
+                cylinder(d=rotor_barrel_dia, h=rotor_barrel_len);
 
-            // Servo horn coupler boss on drive side
-            translate([0, 0, r_len/2])
-                cylinder(d=12, h=4.0);
+            // Retaining flange / bezel on left side (seats flush against housing sleeve)
+            translate([0, 0, -rotor_len_left - rotor_flange_t])
+                cylinder(d=rotor_flange_d, h=rotor_flange_t);
+
+            // Knurled tactile grip ribs around flange perimeter
+            for (a = [0 : 30 : 330]) {
+                rotate([0, 0, a])
+                    translate([rotor_flange_d/2 - 0.5, -0.8, -rotor_len_left - rotor_flange_t])
+                    cube([1.2, 1.6, rotor_flange_t]);
+            }
+
+            // Visual position indicator pointer / tab on flange
+            translate([rotor_flange_d/2, -1.5, -rotor_len_left - rotor_flange_t])
+                cube([2.5, 3.0, rotor_flange_t]);
         }
 
-        // Cross-bore airflow aperture (matches throat size)
+        // Cross-bore airflow aperture (matches throat size, centered at Z=0)
         translate([0, 0, 0])
-            cube([fan_throat_w, r_dia + 2, fan_throat_h], center=true);
+            cube([fan_throat_h, rotor_barrel_dia + 4, fan_throat_w], center=true);
 
-        // Pocket to embed micro-servo arm / horn
-        translate([0, 0, r_len/2 + 1.5])
+        // Recessed pocket for micro-servo collar (12.5mm dia, 3mm deep)
+        translate([0, 0, rotor_len_right - 2.5])
+            cylinder(d=12.5, h=3.0);
+
+        // Recessed pocket to embed MG90S/SG90 servo arm / horn
+        translate([0, 0, rotor_len_right - 4.5])
             cylinder(d=8.2, h=3.0);
-        translate([0, 0, r_len/2 + 1.0])
-            cube([18.5, 4.8, 4.0], center=true);
+        translate([0, 0, rotor_len_right - 4.5])
+            cube([18.5, 4.8, 3.0], center=true);
 
-        // Center screw hole to secure horn to servo spline
-        translate([0, 0, r_len/2 - 8])
-            cylinder(d=2.4, h=15);
+        // Central screwdriver access tunnel (5.5mm dia) from left flange through to servo screw
+        translate([0, 0, -rotor_len_left - rotor_flange_t - 1])
+            cylinder(d=5.5, h=rotor_barrel_len + rotor_flange_t + 2);
     }
 }
 
@@ -508,9 +555,10 @@ if (part == "all") {
     // Assembled visual preview
     color("LightSlateGray", 0.85) main_housing();
 
-    // Damper rotor preview inside sleeve rotated to preview_angle
-    translate([(fan_size + 2*wall)/2, fan_size + wall + 25 + damper_d/2, (fan_depth + wall)/2])
-        rotate([preview_angle, 0, 90])
+    // Damper rotor preview inside sleeve rotated to preview_angle (0 = closed, 90 = open)
+    translate([dc_x, dc_y, dc_z])
+        rotate([0, 90, 0])
+        rotate([0, 0, 90 - preview_angle])
         color("Tomato") damper_rotor();
 
     // Output adapter mounted on front
@@ -527,7 +575,9 @@ if (part == "all") {
 } else if (part == "housing") {
     main_housing();
 } else if (part == "rotor") {
-    damper_rotor();
+    // Oriented vertically with flat flange base on build plate (Z=0) for support-free FDM printing
+    translate([0, 0, rotor_len_left + rotor_flange_t])
+        damper_rotor();
 } else if (part == "output_adapter") {
     output_adapter();
 } else if (part == "vision_pro_plate") {

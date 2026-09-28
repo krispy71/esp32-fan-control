@@ -18,8 +18,8 @@ The technical diagram below illustrates how each 3D-printed component and off-th
 
 | Exact STL Filename | Description | Quantity | Material Recommendation |
 | :--- | :--- | :---: | :--- |
-| [`smoker_housing.stl`](../cad/stl/smoker_housing.stl) | Central chassis body containing the 5015 blower pocket, cylindrical damper bore, servo bracket tower, and electronics bay. | 1 | PETG / ABS / ASA |
-| [`damper_rotor.stl`](../cad/stl/damper_rotor.stl) | Cylindrical rotating barrel valve with rectangular airflow cross-bore and recessed servo horn pocket. | 1 | PETG / ABS / ASA |
+| [`smoker_housing.stl`](../cad/stl/smoker_housing.stl) | Central chassis body containing the 5015 blower pocket, lateral through-bore damper sleeve, horizontal MG90S servo bracket, and electronics bay. | 1 | PETG / ABS / ASA |
+| [`damper_rotor.stl`](../cad/stl/damper_rotor.stl) | Cylindrical rotating barrel valve (27.1mm OD x 33.9mm L) with knurled left retaining bezel, 20x15mm airflow aperture, internal servo horn pocket, and 5.5mm axial screwdriver tunnel. | 1 | PETG / ABS / ASA |
 | [`bbq_guru_vision_pro_nozzle_adapter.stl`](../cad/stl/bbq_guru_vision_pro_nozzle_adapter.stl) | 31.5mm OD cylindrical output nozzle featuring Dash-121/122 O-ring groove, 38mm stop collar, and 4-bolt mounting flange. | 1 | PETG / ABS / ASA |
 | [`fan_cover.stl`](../cad/stl/fan_cover.stl) | Intake protection grille with concentric flow rings and crossbars to prevent finger/debris contact with blower impeller. | 1 | PETG / PLA / ABS |
 | [`electronics_lid.stl`](../cad/stl/electronics_lid.stl) | Vented snap/screw lid protecting the ESP32, MAX31855, and MOSFET circuit with heat exhaust louvers. | 1 | PETG / PLA / ABS |
@@ -43,15 +43,14 @@ The technical diagram below illustrates how each 3D-printed component and off-th
 ## 3. Step-by-Step Assembly Procedure
 
 ### Step 1: Damper Rotor & Servo Subassembly
-1. Take the single-arm servo horn provided in the MG90S servo accessory bag.
-2. Press-fit the horn into the keyed cross-recess on the drive face of [`damper_rotor.stl`](../cad/stl/damper_rotor.stl).
-3. Slide [`damper_rotor.stl`](../cad/stl/damper_rotor.stl) into the cylindrical barrel sleeve of [`smoker_housing.stl`](../cad/stl/smoker_housing.stl).
-4. Power the ESP32 on the bench to zero the servo position ($0^\circ = \text{closed}$ aperture).
-5. Align the MG90S output shaft with the servo horn inside the rotor and press the servo into the bracket tower until flush.
-6. Install the center spline screw through the access hole, then secure the servo mounting ears to the bracket using two M2x8mm screws.
-7. Manually verify smooth $90^\circ$ rotation:
-   * **$0^\circ$ (Closed)**: Damper barrel solid wall blocks the airway completely (anti-chimney draft).
-   * **$90^\circ$ (Open)**: Rectangular cross-bore aligns 100% with the airway channel.
+1. Power the ESP32 or servo tester on the bench to zero the MG90S servo position ($0^\circ = \text{closed}$ damper aperture).
+2. Insert the MG90S servo horizontally into the servo bracket cavity on the right side of [`smoker_housing.stl`](../cad/stl/smoker_housing.stl) with its output spline passing through the 12.5mm dividing wall opening into the damper barrel. Secure the servo ears with two M2x8mm screws.
+3. Take the single-arm servo horn provided with the MG90S and press-fit it into the drive-end pocket of [`damper_rotor.stl`](../cad/stl/damper_rotor.stl).
+4. Slide [`damper_rotor.stl`](../cad/stl/damper_rotor.stl) directly into the open cylindrical bore from the **left face** of [`smoker_housing.stl`](../cad/stl/smoker_housing.stl) until the rotor horn engages the servo spline and the knurled retaining bezel rests flush against the sleeve face.
+5. Insert a magnetic M2 screwdriver through the 5.5mm central axial tunnel in the rotor's left knurled flange and tighten the servo center screw directly into the brass spline.
+6. Verify smooth $90^\circ$ rotation:
+   * **$0^\circ$ (Closed)**: Damper barrel solid wall blocks the airway completely (anti-chimney draft). Pointer indicates Closed.
+   * **$90^\circ$ (Open)**: Rectangular cross-bore aligns 100% with the 20x15mm airway channel.
 
 ### Step 2: Blower Fan & Intake Grille Installation
 1. Route the 5015 blower fan red (+) and black (-) wires through the wiring pass-through slot into the electronics bay.

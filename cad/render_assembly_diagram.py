@@ -87,7 +87,7 @@ def main():
     # Damper Rotor (exploded along -X out of housing bore)
     v_rotor_exp = rotate_y(v_rotor, 90)
     v_rotor_exp = rotate_x(v_rotor_exp, 45) # Expose aperture
-    v_rotor_exp += np.array([-82.0, 91.4, 8.7])
+    v_rotor_exp += np.array([-130.0, 91.4, 8.7])
 
     # Output Nozzle Adapter (exploded along +Y)
     v_nozzle_exp = rotate_x(v_nozzle, -90)
@@ -139,7 +139,7 @@ def main():
         ax.add_collection3d(poly)
 
     # Assembly alignment guidelines
-    ax.plot([-92, 60], [91.4, 91.4], [8.7, 8.7], 'k--', lw=1.3, alpha=0.40)
+    ax.plot([-140, 60], [91.4, 91.4], [8.7, 8.7], 'k--', lw=1.3, alpha=0.40)
     ax.plot([27.4, 27.4], [90, 312], [8.7, 8.7], 'k--', lw=1.3, alpha=0.40)
     ax.plot([27.4, 27.4], [27.4, 27.4], [10, 88], 'k--', lw=1.3, alpha=0.40)
     ax.plot([27.4, 27.4], [-35.2, -35.2], [15, 88], 'k--', lw=1.3, alpha=0.40)
@@ -172,7 +172,7 @@ def main():
 
     # Precise 3D anchor points on actual parts
     anchors = {
-        "rotor": np.array([-72.0, 91.4, 20.0]),
+        "rotor": np.array([-115.0, 91.4, 20.0]),
         "housing": np.array([-4.0, -35.0, 10.0]),
         "nozzle": np.array([38.0, 195.0, 18.0]),
         "plate": np.array([27.4, 290.0, 26.0]),
@@ -236,10 +236,10 @@ def main():
             "key": "rotor",
             "title": "Part 2: damper_rotor.stl",
             "desc": (
-                "• Rotating barrel damper valve (28mm OD x 32mm L)\n"
-                "• Precision dual metering apertures for linear airflow control\n"
-                "• Internal spline socket for SG90 / MG90S micro-servo horn\n"
-                "• Inserts laterally into housing cylindrical bore"
+                "• Precision barrel damper valve (27.1mm OD x 33.9mm L)\n"
+                "• 20x15mm airflow aperture matching blower throat geometry\n"
+                "• Left knurled retaining bezel & 5.5mm screwdriver tunnel\n"
+                "• Internal drive pocket locks directly to micro-servo horn"
             ),
             "box_xy": (0.04, 0.82),
             "arrow_start": (0.23, 0.70),
@@ -253,7 +253,7 @@ def main():
             "desc": (
                 "• Electronics bay protective lid (62.8 x 70.4 x 4.0 mm)\n"
                 "• Beveled perimeter lip with wire pass-through slot\n"
-                "• Dual snap-latch ribs + 2x M3 retention screw anchors\n"
+                "• Heat ventilation slits directed away from smoker face\n"
                 "• Protects ESP32, MAX31855, and MOSFET circuitry"
             ),
             "box_xy": (0.04, 0.54),
@@ -266,10 +266,10 @@ def main():
             "key": "housing",
             "title": "Part 1: smoker_housing.stl",
             "desc": (
-                "• Main unibody chassis (162 x 58.8 x 26.8 mm)\n"
-                "• Integrates 5015 blower chamber, rotary damper sleeve & servo mount\n"
-                "• Rear compartment houses ESP32, thermocouple amplifier & power circuit\n"
-                "• Rear RJ45 / USB umbilical pass-through with reinforced strain relief"
+                "• Main unibody chassis with open lateral damper through-bore\n"
+                "• Integrates 5015 blower chamber, rotary damper sleeve & servo bracket\n"
+                "• Rear bay houses ESP32, thermocouple amplifier & power circuit\n"
+                "• Direct axial damper rotor insertion from left sleeve face"
             ),
             "box_xy": (0.04, 0.26),
             "arrow_start": (0.23, 0.22),
