@@ -8,13 +8,13 @@ Embedded C++17 firmware and offline-first web dashboard for the ESP32 Smoker Fan
 
 ```text
 firmware/
-├── platformio.ini              # PlatformIO build configuration (esp32dev / native)
+├── platformio.ini              # PlatformIO build configuration (esp32dev / esp32dev-max31856 / native)
 ├── partitions.csv              # Custom 4MB partition table (2.5MB App + 1.44MB LittleFS)
 ├── include/                    # Common project headers
 ├── data/                       # LittleFS web dashboard static assets
 │   ├── index.html              # Responsive pitmaster control dashboard
 │   ├── style.css               # Dark theme responsive mobile-first stylesheet
-│   └── app.js                  # SSE/polling telemetry client & HTML5 canvas trend graph
+│   └── app.js                  # Authenticated polling telemetry client & HTML5 canvas trend graph
 ├── src/
 │   ├── Domain/                 # Pure domain business logic (zero Arduino/ESP32 dependencies)
 │   │   ├── Temperature.hpp     # TemperatureReading, SensorRole, SensorFault
@@ -44,7 +44,7 @@ firmware/
 │   │   ├── Storage/
 │   │   │   └── ESP32NVSConfigAdapter.hpp   # Non-Volatile Storage (NVS) Preferences adapter
 │   │   └── Network/
-│   │       └── WebServerAdapter.hpp        # HTTP REST endpoints & LittleFS file server
+│   │       └── WebServerAdapter.hpp        # HTTPS REST endpoints & LittleFS allowlist
 │   └── Controller/
 │       └── main.cpp            # FreeRTOS task setup & pin bootstrap
 └── test/
@@ -64,7 +64,8 @@ firmware/
 | **SPI SCK** | `GPIO 18` | Hardware SPI Clock | Shared clock line for MAX31855 amplifiers |
 | **SPI MISO** | `GPIO 19` | Hardware SPI Data | Shared serial data in from MAX31855 |
 | **CS Pit Thermocouple** | `GPIO 5` | Active-low Chip Select | Dedicated CS for pit/chamber probe |
-| **CS Food Thermocouple**| `GPIO 21` | Active-low Chip Select | Dedicated CS for meat probe 1 |
+| **SPI MOSI** | `GPIO 23` | Hardware SPI Data | Required for display and MAX31856 |
+| **CS Food Thermocouple** | `GPIO 21` | Active-low Chip Select | Optional; disabled unless `SMOKER_FOOD_CS=21` |
 
 ---
 
@@ -80,11 +81,24 @@ The web dashboard is served over HTTPS from ESP32 LittleFS using a per-device So
 | `GET` | `/style.css` | Serves dark theme CSS |
 | `GET` | `/app.js` | Serves real-time JavaScript frontend |
 | `GET` | `/api/telemetry` | Returns instantaneous JSON state snapshot |
-| `GET` | `/api/events` | Server-Sent Events (SSE) telemetry stream at 1Hz |
-| `GET` | `/api/config` | Read persisted tuning config ($K_p, K_i, K_d$, thresholds) |
-| `POST` | `/api/setpoint` | Update pit setpoint: `{"setpoint": 225.0}` (auto-saved to NVS) |
+| `GET` | `/api/command?id=...` | Poll queued/applied/rejected command and persistence result |
+| `GET` | `/api/config` | Read active tuning, calibration, and configuration version; cloud token redacted |
+| `POST` | `/api/setpoint` | Update pit setpoint: `{"setpoint": 225.0, "config_version": 0}` |
 | `POST` | `/api/config` | Update tuning parameters and persist to NVS flash |
-| `POST` | `/api/lid-pause` | Trigger or toggle manual lid-opening airflow suppression |
+| `POST` | `/api/lid-pause` | `{"action":"pause","config_version":0}` or `"resume"` |
+
+All routes require administrator authentication over TLS. The dashboard polls telemetry
+at 1 Hz. Each POST requires the current `config_version` returned by `/api/config`;
+stale versions return 409. A 202 response contains a `request_id`, indicating queued
+acceptance. Poll `/api/command?id=...` until applied/rejected and check `persistence`:
+`saved`, `failed`, `unchanged`, or `not_configured`. An applied setting can still fail to
+persist; the dashboard reports this separately. A pending command prevents a second
+submission until its result is collected. The last eight results are retained in RAM.
+
+`POST /api/config` accepts tuning and calibration fields, including
+`servo_min_pulse_us`, `servo_max_pulse_us`, and `servo_inverted`. Omit
+`meater_cloud_token` to preserve it; send an empty string to remove it. API responses
+expose only whether it is configured.
 
 ### Example Telemetry JSON Payload
 
@@ -111,27 +125,41 @@ The web dashboard is served over HTTPS from ESP32 LittleFS using a per-device So
 
 ## 4. FreeRTOS Task Architecture
 
-* **Core 1 — Control Loop Task (`control_loop_task`)**:
-  * Pinned to CPU Core 1 with priority 2.
-  * Runs at a strict, deterministic $1\,\text{Hz}$ rate via `vTaskDelayUntil`.
-  * Samples MAX31855 thermocouple, checks sensor validity, evaluates lid-open state, executes PID calculation, translates demand to damper and fan via `ActuatorCoordinator`, commands hardware ports, and emits telemetry.
-* **Core 0 — Housekeeping & Web Server**:
-  * Pinned to CPU Core 0.
-  * Serves HTTP REST endpoints and web dashboard assets via `WebServerAdapter`.
-  * Handles continuous asynchronous BLE background advertisements for wireless meat probes.
-  * Periodically updates `ESP32ServoDamperAdapter` to auto-detach the servo after 1.5s of stationary holding (eliminating servo hum, jitter, and motor wear).
+* **Core 1 — Control task (`SmokerControl`)**, priority 2: owns the control service,
+  actuator state, and wired sensor sampling. It samples at a nominal 1 Hz and services
+  the servo idle deadline every 20 ms. Hardware transactions and task scheduling add
+  latency; physical timing must be measured on the bench.
+* **Core 0 — Network task (`SmokerNetwork`) and HTTPS server**: updates BLE/cloud
+  caches, serves the dashboard, and renders the display. Web requests submit typed
+  commands through a bounded queue and read copied state; they never mutate the
+  control service directly. Wireless cache exchanges use short locks.
+* **Shared SPI**: an explicit bus owner serializes complete display/converter frames,
+  including transaction settings and chip-select lifetime. The display uses MOSI23.
+* **Startup**: application ownership is constructed inside `setup()`. The blower is
+  stopped, saved configuration is loaded, calibrated closure is commanded, and then
+  tasks start. LEDC fan channel 0 and servo channel 2 use independent timers.
 
 ---
 
 ## 5. Building, Testing, and Simulation
 
-### Running C++ Host Unit Tests (No hardware required)
-The Domain and Services layers are pure C++17 with zero vendor dependencies, enabling instant host testing:
+### Repeatable software verification
+
+From the repository root, install `uv`, a C++17 compiler, OpenSSL, and the runtime
+libraries `libcjson.so.1` and `libmbedcrypto.so.7`. Build an ESP32 environment once to
+install its framework headers, then run:
 
 ```bash
-g++ -std=c++17 -Wall -Wextra -Werror -I firmware/src firmware/test/test_domain.cpp -o test_domain
-./test_domain
+uv run --no-project --with platformio pio run -d firmware -e esp32dev
+uv run --no-project --with playwright==1.58.0 python -m playwright install chromium
+tools/verify.sh --firmware --browser
 ```
+
+The driver runs Python tests, strict C++ domain/service/native checks, production
+Arduino paths against SPI/PWM/NVS spies, the firmware HTTPS handler, both ESP32
+converter builds, and the real simulator/browser flow. Omit `--firmware` or
+`--browser` to skip those optional stages. Hardware spies do not establish electrical
+accuracy or actual servo movement.
 
 ### Running Local Python Web Simulation
 Launch the desktop simulator with the live web dashboard served at `https://127.0.0.1:8443`:
@@ -148,7 +176,18 @@ cd firmware
 uv run --with platformio pio run -e esp32dev
 ```
 
+The default `esp32dev` environment supports one wired **K-type probe through a
+MAX31855K** on CS5. For a MAX31856 configured as K-type, build
+`-e esp32dev-max31856` and connect MOSI23 as well. A second wired food converter is
+optional: add `-D SMOKER_FOOD_CS=21` to that environment's build flags when installed.
+Both converters share SCK18/MISO19 and have separate CS pins. Never connect a bare
+thermocouple directly to an ESP32 analog input.
+
 ### Flashing Firmware & LittleFS Web Assets to ESP32
+
+First provision and copy the three private device files described in
+[device access](../docs/device-access.md). Substitute the MAX31856 environment in
+both upload commands when using that converter.
 ```bash
 cd firmware
 
@@ -193,33 +232,31 @@ Perform these checks with the ESP32 **unpowered**:
    ```bash
    uv run --with platformio pio device monitor -b 115200
    ```
-4. Verify the startup sequence matches the expected boot log:
-   - [ ] Serial banner displays: `ESP32 Smoker Fan & Servo Damper Controller`
-   - [ ] LittleFS mounts successfully: `[Web] LittleFS mounted successfully.`
-   - [ ] SoftAP initializes: `[Web] Started SoftAP: SmokerController`, `[Web] AP IP address: 192.168.4.1`
-   - [ ] Real-time control loop starts: `[Init] Real-time control loop running on FreeRTOS Core 1.`
-   - [ ] Periodic 1Hz telemetry lines begin streaming:
-     ```text
-     [1000 ms] Pit: 72.5 F | Set: 225.0 F | Meat: N/C | Demand: 100.0% | Damper: 100.0% | Fan: 100.0% | Lid: CLOSED | State: REGULATING
-     ```
+4. Verify startup behavior:
+   - [ ] Fan remains off until a valid pit sample is available; servo closes at boot.
+   - [ ] With provisioned access files, serial reports
+     `[Web] Provisioned HTTPS dashboard ready on port 443.`
+   - [ ] The private per-device SSID becomes visible; no password is printed.
+   - [ ] No shared-bus or control-task initialization error is reported.
+   - [ ] Periodic telemetry shows pit validity, demand, damper, fan, and lid status.
 
 ### 6.3 Functional Bench Calibration & Verification
 
 Step through each subsystem to confirm physical hardware operation:
 
-#### A. Thermocouple Subsystem (MAX31855)
+#### A. Thermocouple Subsystem (MAX31855K or MAX31856)
 - [ ] **Ambient Sanity**: With thermocouple attached, verify serial console reports room temperature (~68°F – 74°F).
 - [ ] **Thermal Response**: Pinch the tip of the thermocouple between your fingers; confirm temperature immediately rises to 80°F–88°F.
-- [ ] **Open-Circuit Fault Detection**: Unplug or disconnect one thermocouple lead. Verify the serial log switches to `SENSOR_FAULT` and demand drops to `0.0%` (failsafe lock).
+- [ ] **Open-Circuit Fault Detection**: Unplug or disconnect one thermocouple lead. Verify the serial log reports a pit fault and demand drops to `0.0%` (failsafe lock).
 
 #### B. Damper Actuator Subsystem (MG90S Servo)
 - [ ] **Zero-Position (Closed)**: At initial boot, confirm the damper rotor moves to fully closed position ($0^\circ$).
 - [ ] **Idle-Detach Verification**: Observe the servo after it reaches position. Within 1.5 seconds, the ESP32 automatically detaches the PWM pin (`ledcDetachPin`). Confirm all servo hum, vibration, and jitter stops completely.
-- [ ] **Full Range Sweep**: Send a test setpoint or adjust setpoint via API to demand 50% airflow; confirm damper opens to approximately $45^\circ$, then silences.
+- [ ] **Full Range Sweep**: Adjust calibration in the dashboard and verify closed/open mechanical endpoints and direction. Confirm values persist across a reboot; verify movement is followed by idle detach.
 
 #### C. Blower Fan Subsystem (N-MOSFET & 25kHz PWM)
-- [ ] **Low-Demand Deadband**: When demand is below the airflow threshold ($\le 50\%$), confirm the blower fan is completely idle (0% duty cycle) while the damper modulates airflow.
-- [ ] **High-Demand Activation**: When demand exceeds 50%, confirm the blower fan spins up smoothly without any audible coil whine (verified 25 kHz ultrasonic PWM).
+- [ ] **Low-Demand Deadband**: When demand is below the airflow threshold (default $\le 40\%$), confirm the blower fan is completely idle (0% duty cycle) while the damper modulates airflow.
+- [ ] **High-Demand Activation**: When demand exceeds the configured threshold (default 40%), confirm the blower fan spins up smoothly without any audible coil whine (verified 25 kHz ultrasonic PWM).
 - [ ] **Max Speed (100% Demand)**: At 100% demand, confirm the fan runs at full 5V velocity.
 
 #### D. Web Dashboard & Wi-Fi Connectivity
@@ -228,9 +265,9 @@ Step through each subsystem to confirm physical hardware operation:
 - [ ] Verify the responsive pitmaster dashboard loads with real-time temperature gauges and canvas graph.
 - [ ] Tap the **Setpoint** control, enter `250`, and submit. Verify:
   - Web UI displays new setpoint.
-  - Serial monitor confirms setpoint update.
+  - Dashboard reports application and successful persistence.
   - The value persists after power-cycling the ESP32 (stored in NVS flash).
-- [ ] Tap **Lid Open Pause**. Verify status changes to `LID_OPEN`, blower turns off, and damper closes. Tap again to cancel.
+- [ ] Tap **Lid Open Pause**. Verify status changes to `LID_OPEN`, blower turns off, and damper closes. Use the resume control to cancel.
 
 #### E. Wireless BLE Meat Probe Verification (Optional / If Equipped)
 - [ ] Turn on a compatible BLE meat probe (MEATER, Inkbird, or BBQ-BT).
