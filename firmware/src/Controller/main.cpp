@@ -45,8 +45,8 @@ public:
     void controlStep(uint32_t now) {
         sensors.setMode(control.config().meat_probe_mode);
         control.executeCycle(now);
-        damper.update(now);
     }
+    void maintainActuator(uint32_t now) { damper.update(now); }
     void initializeNetwork() {
         display.begin();
         passiveBle.begin();
@@ -94,9 +94,15 @@ private:
 void controlLoopTask(void* context) {
     auto& app = *static_cast<Application*>(context);
     TickType_t lastWake = xTaskGetTickCount();
+    uint32_t lastSample = millis() - 1000U;
     for (;;) {
-        app.controlStep(millis());
-        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(1000));
+        const uint32_t now = millis();
+        if (now - lastSample >= 1000U) {
+            app.controlStep(now);
+            lastSample = now;
+        }
+        app.maintainActuator(now);
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(20));
     }
 }
 void networkLoopTask(void* context) {

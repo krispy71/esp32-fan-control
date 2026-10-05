@@ -63,10 +63,16 @@ namespace Spy {
 struct Task { void (*entry)(void*); void* context; int core; };
 inline std::vector<Task> tasks;
 struct TaskYield {};
+inline unsigned delaysBeforeYield = 0;
+inline uint32_t lastDelayTicks = 0;
 }
 inline uint32_t xTaskGetTickCount() { return millis(); }
 inline int xTaskCreatePinnedToCore(void (*entry)(void*), const char*, uint32_t, void* context, int, void*, int core) {
     Spy::event("task", core); Spy::tasks.push_back({entry, context, core}); return pdPASS;
 }
-inline void vTaskDelayUntil(TickType_t*, TickType_t) { throw Spy::TaskYield{}; }
+inline void vTaskDelayUntil(TickType_t*, TickType_t ticks) {
+    Spy::lastDelayTicks = ticks; Spy::now += ticks;
+    if (Spy::delaysBeforeYield > 0) { --Spy::delaysBeforeYield; return; }
+    throw Spy::TaskYield{};
+}
 inline void vTaskDelay(TickType_t) { throw Spy::TaskYield{}; }
