@@ -25,7 +25,9 @@ public:
             pinMode(cs_food1_, OUTPUT);
             digitalWrite(cs_food1_, HIGH);
         }
+        started_ms_ = millis();
 #endif
+        begun_ = true;
     }
 
     Domain::TemperatureReading readTemperature(Domain::SensorRole role) noexcept override {
@@ -35,6 +37,10 @@ public:
 #endif
         if (role != Domain::SensorRole::Pit && (role != Domain::SensorRole::Food1 || cs_food1_ < 0))
             return Domain::TemperatureReading{0.0f, role, now_ms, Domain::SensorFault::Disconnected};
+        // MAX31855 datasheet rev. 5 p.4 specifies tCONV_PU = 200 ms.
+        // https://www.analog.com/media/en/technical-documentation/data-sheets/MAX31855.pdf
+        if (!begun_ || now_ms - started_ms_ < 200)
+            return Domain::TemperatureReading{0.0f, role, now_ms, Domain::SensorFault::Stale};
         const uint8_t cs = role == Domain::SensorRole::Pit ? cs_pit_ : static_cast<uint8_t>(cs_food1_);
         return decodeRawReading(readRaw32(cs), role, now_ms);
     }
@@ -87,6 +93,8 @@ private:
     Hardware::SharedSpiBus& bus_;
     uint8_t cs_pit_;
     int8_t cs_food1_;
+    uint32_t started_ms_{0};
+    bool begun_{false};
 };
 
 } // namespace SmokerController::Adapters::Sensors

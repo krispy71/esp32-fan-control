@@ -44,9 +44,13 @@ static void frame55(uint32_t raw) {
 static void spiFramesAndFaults() {
     Adapters::Hardware::SharedSpiBus bus; assert(bus.begin());
     Adapters::Sensors::MAX31855SensorAdapter sensor(bus);
-    sensor.begin(); Spy::now = 1234;
+    Spy::now = 0; sensor.begin();
+    Spy::clear(); Spy::now = 199;
+    assert(sensor.readTemperature(Domain::SensorRole::Pit).fault == Domain::SensorFault::Stale);
+    assert(Spy::events.empty());
+    Spy::now = 200;
     frame55(400U << 18); auto value = sensor.readTemperature(Domain::SensorRole::Pit);
-    assert(value.celsius == 100 && value.timestamp_ms == 1234 && value.isValid());
+    assert(value.celsius == 100 && value.timestamp_ms == 200 && value.isValid());
     frame55(0xFFFC0000); value = sensor.readTemperature(Domain::SensorRole::Pit);
     assert(value.celsius == -0.25f);
     for (const auto& pair : {std::pair<uint32_t, Domain::SensorFault>{1, Domain::SensorFault::Disconnected}, {2, Domain::SensorFault::ShortToGnd}, {4, Domain::SensorFault::ShortToVcc}}) {

@@ -19,6 +19,9 @@ int main() {
         if (Spy::events[i].operation == "task" && Spy::events[i].a == 1) task=i;
     }
     assert(nvs < pwm && pwm < task);
+    try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
+    assert(Spy::duty.at(0) == 0); // First conversion is not ready at task launch.
+    Spy::now = 200;
     // Real control entry point: a healthy sample drives outputs, then a pit fault clamps.
     Spy::response = {0x04,0xB0,0,0}; // 75 C => active demand below 225 F target
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
