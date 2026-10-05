@@ -128,6 +128,24 @@ static void startupAndConfiguration() {
     assert((actuators.events == std::vector<std::string>{"off", "configure", "close"}));
 }
 
+static void configuredMinimumBlowerSpeed() {
+    for (bool persisted : {false, true}) {
+        Sensor sensor; Actuators actuators; Storage storage;
+        sensor.pit = Domain::TemperatureReading::fromFahrenheit(174, Domain::SensorRole::Pit, 0);
+        Domain::PIDConfig tuning{}; tuning.kp = 1; tuning.ki = 0; tuning.kd = 0;
+        storage.exists = persisted;
+        storage.saved.pid_kp = 1; storage.saved.pid_ki = 0; storage.saved.pid_kd = 0;
+        storage.saved.airflow_threshold_pct = 50;
+        Services::SmokerControlService service(sensor, actuators, actuators, nullptr, 225,
+            Domain::ActuatorCoordinator{50, 50}, tuning, &storage);
+        service.initialize();
+        assert(std::abs(service.executeCycle(0).blower_speed_pct - 51.0f) < 0.01f);
+        auto changed = service.config(); changed.airflow_threshold_pct = 30;
+        assert(service.updateConfig(changed));
+        assert(std::abs(service.executeCycle(1000).blower_speed_pct - 65.0f) < 0.01f);
+    }
+}
+
 static void activeOutputsThenFault() {
     for (auto fault : {Domain::SensorFault::Disconnected, Domain::SensorFault::ShortToGnd,
                       Domain::SensorFault::ShortToVcc, Domain::SensorFault::OutOfRange, Domain::SensorFault::Stale}) {
@@ -269,7 +287,7 @@ static void commandBoundaryAndOwnership() {
 }
 
 int main() {
-    startupAndConfiguration(); activeOutputsThenFault(); decodedTemperatureFrames();
+    startupAndConfiguration(); configuredMinimumBlowerSpeed(); activeOutputsThenFault(); decodedTemperatureFrames();
     suppressionRecovery(); commandBoundaryAndOwnership();
     std::cout << "Core production regression suites passed\n";
 }

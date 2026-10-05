@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
+from esp32_fan_control.Domain.airflow import ActuatorCoordinator
+from esp32_fan_control.Domain.pid import PIDConfig
+
 from esp32_fan_control.Domain.configuration import DamperCalibration
 from esp32_fan_control.Domain.temperature import (
     SensorFault,
@@ -56,6 +63,18 @@ class FakeTelemetry(TelemetryPublisherPort):
 
     def publish(self, snapshot: TelemetrySnapshot) -> None:
         self.snapshots.append(snapshot)
+
+
+def test_configuration_preserves_minimum_blower_speed() -> None:
+    service = SmokerControlService(
+        FakeSensor(pit_f=174), FakeDamper(), FakeBlower(),
+        coordinator=ActuatorCoordinator(50, 50),
+        pid_config=PIDConfig(kp=1, ki=0, kd=0),
+    )
+    service.initialize()
+    assert service.execute_cycle(0).blower_speed_pct == pytest.approx(51)
+    service.update_config(replace(service.config, airflow_threshold_pct=30))
+    assert service.execute_cycle(1).blower_speed_pct == pytest.approx(65)
 
 
 def test_service_fail_safe_on_sensor_disconnect() -> None:
@@ -166,4 +185,3 @@ def test_service_manual_lid_pause_and_last_snapshot() -> None:
     assert service.is_lid_open is False
     snap3 = service.execute_cycle(current_time_s=3.0)
     assert snap3.lid_open is False
-

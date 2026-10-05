@@ -96,7 +96,9 @@ class SmokerControlService:
         self._pid.setpoint = self._config.setpoint_f
         self._pid.config = replace(self._pid.config, kp=self._config.pid_kp,
                                    ki=self._config.pid_ki, kd=self._config.pid_kd)
-        self._coordinator = ActuatorCoordinator(self._config.airflow_threshold_pct)
+        self._coordinator = ActuatorCoordinator(
+            self._config.airflow_threshold_pct, self._coordinator.min_blower_speed_pct
+        )
         self._lid_detector.configure(LidDetectorConfig(
             drop_threshold_deg=self._config.lid_drop_threshold_deg,
             pause_duration_s=self._config.lid_pause_duration_s,

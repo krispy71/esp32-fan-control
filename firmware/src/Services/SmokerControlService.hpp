@@ -163,7 +163,8 @@ private:
         tuning.ki = config_.pid_ki;
         tuning.kd = config_.pid_kd;
         pid_.setConfig(tuning);
-        coordinator_ = Domain::ActuatorCoordinator(config_.airflow_threshold_pct);
+        coordinator_ = Domain::ActuatorCoordinator(config_.airflow_threshold_pct,
+                                                  coordinator_.minBlowerSpeed());
         // A configuration update must never cancel an active safety pause.
         lid_detector_.setConfig({config_.lid_drop_threshold_deg, 30000, config_.lid_pause_duration_ms});
     }
