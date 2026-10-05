@@ -35,7 +35,8 @@ class RunningController:
         self.channel = ThreadedControlChannel()
         self.actuator = ConsoleActuator()
         self.storage = storage or JsonConfigAdapter(directory / "settings.json")
-        self.service = SmokerControlService(SimulatedSensor(), self.actuator, self.actuator,
+        self.sensor = SimulatedSensor()
+        self.service = SmokerControlService(self.sensor, self.actuator, self.actuator,
                                            config_storage=self.storage, control_channel=self.channel)
         self.service.initialize()
         self.service.execute_cycle(0.0)
@@ -211,6 +212,89 @@ def test_calibration_queued_applied_persisted_and_restored(controller):
     restored.initialize()
     assert restored.config.servo_inverted and restored.config.servo_max_pulse_us == 2200
     assert controller.storage.path.stat().st_mode & 0o077 == 0
+
+
+def test_setpoint_queued_applied_acknowledged_and_persisted(controller):
+    for target in (175.0, 275.5):
+        before = controller.channel.snapshot()
+        outputs = controller.actuator.damper_pct, controller.actuator.blower_pct
+        persisted = controller.storage.path.read_bytes() if controller.storage.path.exists() else None
+        status, raw, _ = controller.mutation({"setpoint": target}, "/api/setpoint")
+        assert status == 202
+        command = json.loads(raw)
+        assert command["status"] == "queued"
+        result_path = f"/api/command?id={command['request_id']}"
+        status, raw, _ = controller.request(result_path)
+        assert status == 202 and json.loads(raw)["status"] == "queued"
+        # The HTTPS worker cannot mutate settings, persistence or outputs itself.
+        assert controller.service.config == before.config
+        assert (controller.actuator.damper_pct, controller.actuator.blower_pct) == outputs
+        assert json.loads(controller.request("/api/config")[1])["setpoint_f"] == before.config.setpoint_f
+        assert (controller.storage.path.read_bytes() if controller.storage.path.exists() else None) == persisted
+
+        controller.apply()
+        status, raw, _ = controller.request(result_path)
+        assert status == 200
+        assert json.loads(raw) == {
+            "request_id": command["request_id"], "status": "applied",
+            "persistence": "saved", "config_version": before.config_version + 1,
+        }
+        assert controller.service.setpoint_f == target
+        assert json.loads(controller.request("/api/config")[1])["setpoint_f"] == target
+        assert json.loads(controller.storage.path.read_text())["setpoint_f"] == target
+        telemetry = json.loads(controller.request("/api/telemetry")[1])
+        assert telemetry["setpoint_f"] == target
+        assert telemetry["status"] == "REGULATING" and telemetry["lid_open"] is False
+        assert telemetry["damper_position_pct"] == controller.actuator.damper_pct
+        assert telemetry["blower_speed_pct"] == controller.actuator.blower_pct
+        if target < controller.sensor.pit_f:
+            assert controller.actuator.damper_pct == controller.actuator.blower_pct == 0
+        else:
+            assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
+        restored = SmokerControlService(SimulatedSensor(), ConsoleActuator(), ConsoleActuator(),
+                                       config_storage=controller.storage)
+        restored.initialize()
+        assert restored.setpoint_f == target
+
+
+def test_lid_pause_and_resume_apply_at_owner_with_actuator_effects(controller):
+    before = controller.channel.snapshot()
+    assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
+    for action in ("pause", "resume"):
+        pause = action == "pause"
+        outputs = controller.actuator.damper_pct, controller.actuator.blower_pct
+        status, raw, _ = controller.mutation({"action": action}, "/api/lid-pause")
+        assert status == 202
+        command = json.loads(raw)
+        assert command["status"] == "queued"
+        result_path = f"/api/command?id={command['request_id']}"
+        status, raw, _ = controller.request(result_path)
+        assert status == 202 and json.loads(raw)["status"] == "queued"
+        assert controller.service.is_lid_open is not pause
+        assert (controller.actuator.damper_pct, controller.actuator.blower_pct) == outputs
+        assert json.loads(controller.request("/api/telemetry")[1])["lid_open"] is not pause
+
+        controller.apply()
+        status, raw, _ = controller.request(result_path)
+        assert status == 200
+        assert json.loads(raw) == {
+            "request_id": command["request_id"], "status": "applied",
+            "persistence": "unchanged", "config_version": before.config_version,
+        }
+        assert controller.service.is_lid_open is pause
+        telemetry = json.loads(controller.request("/api/telemetry")[1])
+        assert telemetry["lid_open"] is pause
+        assert telemetry["status"] == ("LID_OPEN" if pause else "REGULATING")
+        assert telemetry["damper_position_pct"] == controller.actuator.damper_pct
+        assert telemetry["blower_speed_pct"] == controller.actuator.blower_pct
+        if pause:
+            assert telemetry["demand_pct"] == 0
+            assert controller.actuator.damper_pct == controller.actuator.blower_pct == 0
+        else:
+            assert telemetry["demand_pct"] > 0
+            assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
+        assert controller.service.config == before.config
+        assert not controller.storage.path.exists()  # Transient lid controls are not saved.
 
 
 def test_stale_updates_rejected_in_http_and_at_owner(controller):

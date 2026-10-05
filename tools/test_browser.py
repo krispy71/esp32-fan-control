@@ -79,6 +79,85 @@ def main():
                 page.goto(url)
                 expect(page.locator("#connection-badge")).to_have_text("Connected")
                 expect(page.locator("#storage-status-badge")).to_have_text("Storage ready")
+
+                def displayed_telemetry(predicate=lambda snapshot: True):
+                    # Observe real polling responses; never intercept or fabricate API data.
+                    for _ in range(10):
+                        response = page.wait_for_event("response", predicate=lambda response:
+                            response.url == f"{url}/api/telemetry" and response.status == 200, timeout=5000)
+                        snapshot = response.json()
+                        if not predicate(snapshot):
+                            continue
+                        expect(page.locator("#pit-temp")).to_have_text(f"{snapshot['pit_temp_f']:.1f}")
+                        expect(page.locator("#meat-temp")).to_have_text(f"{snapshot['meat_temp_f']:.1f}")
+                        expect(page.locator("#current-setpoint")).to_have_text(f"{snapshot['setpoint_f']:.1f}°F")
+                        expect(page.locator("#damper-val")).to_have_text(f"{snapshot['damper_position_pct']:.0f}%")
+                        expect(page.locator("#blower-val")).to_have_text(f"{snapshot['blower_speed_pct']:.0f}%")
+                        expect(page.locator("#system-state")).to_have_text(snapshot["status"])
+                        return snapshot
+                    raise AssertionError("Real telemetry did not reach the expected state")
+
+                def submit_control(path, button, values):
+                    with page.expect_response(lambda response:
+                            response.url == url + path and response.request.method == "POST", timeout=5000) as submitted:
+                        button.click()
+                    response = submitted.value
+                    assert response.status == 202
+                    assert all(response.request.post_data_json[key] == value for key, value in values.items())
+                    queued = response.json()
+                    assert queued["status"] == "queued"
+                    acknowledgment = page.wait_for_event("response", predicate=lambda response:
+                        response.url == f"{url}/api/command?id={queued['request_id']}" and response.status == 200,
+                        timeout=10000).json()
+                    assert acknowledgment["request_id"] == queued["request_id"]
+                    assert acknowledgment["status"] == "applied"
+                    expect(page.locator("#control-msg")).to_have_text(
+                        "Airflow control updated." if path == "/api/lid-pause" else "Applied and saved.")
+                    return acknowledgment
+
+                first = displayed_telemetry()
+                second = displayed_telemetry(lambda snapshot:
+                    f"{snapshot['pit_temp_f']:.1f}" != f"{first['pit_temp_f']:.1f}"
+                    and f"{snapshot['meat_temp_f']:.1f}" != f"{first['meat_temp_f']:.1f}")
+                assert second["timestamp_ms"] > first["timestamp_ms"]
+
+                # Exercise both sides of the live pit temperature through the actual form.
+                for target in (175, 275):
+                    page.locator("#setpoint-input").fill(str(target))
+                    result = submit_control("/api/setpoint", page.get_by_role("button", name="Set", exact=True),
+                                            {"setpoint": target})
+                    assert result["persistence"] == "saved"
+                    assert json.loads(config.read_text())["setpoint_f"] == target
+                    snapshot = displayed_telemetry(lambda snapshot: snapshot["setpoint_f"] == target)
+                    assert snapshot["status"] == "REGULATING" and snapshot["lid_open"] is False
+                    if target == 175:
+                        assert snapshot["pit_temp_f"] > target
+                        assert snapshot["damper_position_pct"] == snapshot["blower_speed_pct"] == 0
+                    else:
+                        assert snapshot["pit_temp_f"] < target
+                        assert snapshot["damper_position_pct"] > 0 and snapshot["blower_speed_pct"] > 0
+
+                saved = config.read_bytes()
+                version = result["config_version"]
+                for action in ("pause", "resume"):
+                    pause = action == "pause"
+                    result = submit_control("/api/lid-pause", page.locator("#lid-pause-btn"), {"action": action})
+                    assert result["config_version"] == version
+                    snapshot = displayed_telemetry(lambda snapshot: snapshot["lid_open"] is pause)
+                    expect(page.locator("#lid-pause-btn")).to_have_text(
+                        "Resume Airflow (Lid Open)" if pause else "Pause for Lid Opening")
+                    assert snapshot["status"] == ("LID_OPEN" if pause else "REGULATING")
+                    if pause:
+                        assert snapshot["demand_pct"] == 0
+                        assert snapshot["damper_position_pct"] == snapshot["blower_speed_pct"] == 0
+                    else:
+                        assert snapshot["demand_pct"] > 0
+                        assert snapshot["damper_position_pct"] > 0 and snapshot["blower_speed_pct"] > 0
+                    assert config.read_bytes() == saved
+
+                # Refresh the tuning form's version after the preceding setpoint changes.
+                page.reload()
+                expect(page.locator("#storage-status-badge")).to_have_text("Storage ready")
                 page.locator("#cfg-servo-min").fill("850")
                 page.locator("#cfg-servo-max").fill("2150")
                 page.locator("#cfg-servo-inverted").check()
@@ -144,11 +223,12 @@ def main():
                 expect(page.locator("#cfg-servo-min")).to_have_value("850")
                 expect(page.locator("#cfg-servo-max")).to_have_value("2200")
                 expect(page.locator("#cfg-servo-inverted")).to_be_checked()
+                expect(page.locator("#current-setpoint")).to_have_text("275.0°F")
                 browser.close()
         finally:
             process.terminate()
             process.wait(timeout=5)
-        print("HTTPS browser verification passed: calibration, rejection, token secrecy, restart, save failure, keyboard, 360px, axe dark/light.")
+        print("HTTPS browser verification passed: live telemetry, setpoint, pause/resume, calibration, rejection, token secrecy, restart, save failure, keyboard, 360px, axe dark/light.")
 
 
 if __name__ == "__main__":
