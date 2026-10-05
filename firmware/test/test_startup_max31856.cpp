@@ -26,8 +26,8 @@ int main(int argc, char** argv) {
             assert(Spy::duty.at(2) == 2000ULL * 65535 / 20000);
         }
         if (!faultObservedAt && device.pit.registers[15] == 1) faultObservedAt = now;
-        if (faultObservedAt && now % 1000 == 0) {
-            // The first service sample containing the hardware fault must clamp.
+        if (faultObservedAt) {
+            // Safety checks clamp immediately when the conversion reports a fault.
             assert(Spy::duty.at(0) == 0);
             if (!clampedAt) {
                 clampedAt = now;
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     // Conversion completion can precede its next 20 ms polling tick, so a
     // disconnect in that gap is found by the following completed conversion.
     assert(faultObservedAt >= disconnectAt && faultObservedAt - disconnectAt <= 200);
-    assert(clampedAt >= faultObservedAt && clampedAt - faultObservedAt < 1000);
+    assert(clampedAt >= faultObservedAt && clampedAt - disconnectAt <= 1000);
     assert(device.pit.completedAt.size() >= 20);
     for (size_t n = 1; n < device.pit.completedAt.size(); ++n)
         assert(device.pit.completedAt[n] - device.pit.completedAt[n - 1] == 180);

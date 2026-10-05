@@ -176,6 +176,27 @@ static void activeOutputsThenFault() {
     }
 }
 
+static void safetyBetweenPidCycles() {
+    Sensor sensor; Actuators actuators; Channel channel;
+    Services::SmokerControlService service(sensor, actuators, actuators, nullptr, 225,
+        Domain::ActuatorCoordinator{}, Domain::PIDConfig{}, nullptr, &channel);
+    service.initialize(); service.executeCycle(1000);
+    assert(actuators.blower > 0);
+    const auto healthy = channel.state.telemetry;
+    service.verifyPitSafety(1020);
+    assert(channel.state.telemetry.timestamp_ms == healthy.timestamp_ms);
+    assert(actuators.blower == healthy.blower_speed_pct); // No PID advance on a health check.
+    sensor.pit.fault = Domain::SensorFault::Disconnected;
+    service.verifyPitSafety(1040);
+    assert(actuators.blower == 0 && actuators.damper == 0);
+    assert(!channel.state.telemetry.is_pit_valid && channel.state.telemetry.timestamp_ms == 1040);
+    assert(channel.state.telemetry.demand_pct == 0 && service.isFailSafe());
+    sensor.pit.fault = Domain::SensorFault::Ok;
+    service.verifyPitSafety(1060);
+    assert(actuators.blower == 0); // Recovery belongs to the next complete control cycle.
+    assert(service.executeCycle(2000).is_pit_valid && !service.isFailSafe());
+}
+
 static void decodedTemperatureFrames() {
     using Decoder = Adapters::Sensors::MAX31855SensorAdapter;
     const auto negative = Decoder::decodeRawReading((static_cast<uint32_t>(-40) & 0x3fff) << 18,
@@ -288,6 +309,6 @@ static void commandBoundaryAndOwnership() {
 
 int main() {
     startupAndConfiguration(); configuredMinimumBlowerSpeed(); activeOutputsThenFault(); decodedTemperatureFrames();
-    suppressionRecovery(); commandBoundaryAndOwnership();
+    safetyBetweenPidCycles(); suppressionRecovery(); commandBoundaryAndOwnership();
     std::cout << "Core production regression suites passed\n";
 }

@@ -32,15 +32,26 @@ int main() {
     Spy::transferDelayMs = 0;
     assert(Spy::lastDelayTicks == 20);
     Spy::clear(); Spy::now = 220; Spy::delaysBeforeYield = 79;
-    Spy::response = {0x04,0xB0,0,0,0x04,0xB0,0,0};
+    uint32_t frame = 0x04B00000; unsigned byte = 0;
+    Spy::transferHook = [&](int cs, uint8_t) {
+        assert(cs == 5);
+        return static_cast<uint8_t>(frame >> (24 - 8 * (byte++ % 4)));
+    };
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
-    assert(Spy::count("transfer", 5) == 8); // 1Hz acquisition across 80 x 20ms ticks.
+    assert(Spy::count("transfer", 5) == 328); // 2 PID samples + 80 fast pit-health checks.
     assert(Spy::count("detach", 26) == 1); // 1.5s idle deadline serviced on owning task.
 
-    Spy::now = 2000; Spy::response = {0,1,0,1}; Spy::transferDelayMs = 1;
+    // Disconnect between PID samples. Healthy data must not hold the fan on
+    // until the next full cycle at 3000 ms.
+    Spy::now = 2000; Spy::delaysBeforeYield = 5;
+    Spy::taskDelayHook = [&] {
+        if (millis() == 2000) assert(Spy::duty.at(0) > 0);
+        if (millis() == 2020) frame = 0x00010001;
+        if (millis() >= 2040) assert(Spy::duty.at(0) == 0);
+    };
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::duty.at(0) == 0 && Spy::duty.at(2) == 2200ULL * 65535 / 20000);
-    Spy::transferDelayMs = 0;
+    Spy::transferHook = {}; Spy::taskDelayHook = {};
     try { Spy::tasks[1].entry(Spy::tasks[1].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::count("networkBegin") == 1);
     Spy::clear(); loop(); assert(Spy::events.empty());

@@ -103,6 +103,17 @@ public:
     }
     void cancelLidPause() noexcept { lid_detector_.reset(); }
 
+    // The owner task can inhibit unsafe airflow between normal PID cycles.
+    // Healthy readings never advance PID state or consume commands here.
+    void verifyPitSafety(uint32_t current_time_ms) noexcept {
+        if (!initialized_ || is_fail_safe_) return;
+        if (sensor_.readTemperature(Domain::SensorRole::Pit).isValid()) return;
+        auto snapshot = last_snapshot_;
+        snapshot.timestamp_ms = current_time_ms;
+        applyPitFault(snapshot);
+        publish(snapshot);
+    }
+
     Ports::TelemetrySnapshot executeCycle(uint32_t current_time_ms) noexcept {
         Domain::TelemetrySnapshot snapshot{};
         snapshot.timestamp_ms = current_time_ms;
@@ -121,12 +132,7 @@ public:
         std::strncpy(snapshot.meat_probe_name, meat.probe_name, sizeof(snapshot.meat_probe_name) - 1);
 
         if (!pit.isValid()) {
-            is_fail_safe_ = true;
-            pid_.suspend();
-            // Do not let pre-fault samples trigger a spurious lid event on recovery.
-            if (!lid_detector_.isActive()) lid_detector_.reset();
-            stopAirflow();
-            std::strcpy(snapshot.status, "FAULT: SENSOR_INVALID");
+            applyPitFault(snapshot);
             return publish(snapshot);
         }
 
@@ -156,6 +162,17 @@ public:
     }
 
 private:
+    void applyPitFault(Domain::TelemetrySnapshot& snapshot) noexcept {
+        is_fail_safe_ = true;
+        pid_.suspend();
+        // Do not let pre-fault samples trigger a spurious lid event on recovery.
+        if (!lid_detector_.isActive()) lid_detector_.reset();
+        stopAirflow();
+        snapshot.is_pit_valid = false;
+        snapshot.pit_temp_f = 0.0f;
+        snapshot.damper_position_pct = snapshot.blower_speed_pct = snapshot.demand_pct = 0.0f;
+        std::strcpy(snapshot.status, "FAULT: SENSOR_INVALID");
+    }
     void applyConfiguration() noexcept {
         pid_.setSetpoint(config_.setpoint_f);
         auto tuning = pid_.config();

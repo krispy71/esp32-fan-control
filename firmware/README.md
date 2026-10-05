@@ -126,8 +126,8 @@ expose only whether it is configured.
 ## 4. FreeRTOS Task Architecture
 
 * **Core 1 — Control task (`SmokerControl`)**, priority 2: owns the control service,
-  actuator state, and wired sensor sampling. It samples at a nominal 1 Hz and services
-  the servo idle deadline every 20 ms. Hardware transactions and task scheduling add
+  actuator state, and wired sensor sampling. It runs PID and normal telemetry at a nominal 1 Hz, checks pit safety between
+  those cycles, and services converter/servo upkeep every 20 ms. Hardware transactions and task scheduling add
   latency; physical timing must be measured on the bench.
 * **Core 0 — Network task (`SmokerNetwork`) and HTTPS server**: updates BLE/cloud
   caches, serves the dashboard, and renders the display. Web requests submit typed

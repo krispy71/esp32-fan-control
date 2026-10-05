@@ -35,7 +35,8 @@ dashboard as an exception to the prescribed Next.js stack on October 4.
 Domain: reuse PID, Temperature, SmokerConfig, and DisplayView; add validated damper
 calibration and owned telemetry/control messages. Domain must not import Services.
 Services: reuse SmokerControlService; explicit initialization, suppression recovery,
-calibration application, and command consumption/publication at the control boundary.
+calibration application, and command consumption/publication at the control boundary. A service-owned fast
+pit-health check inhibits outputs between PID cycles; healthy checks never advance PID.
 Ports: reuse sensor/storage/actuator ports; add the related damper calibration operation
 and a bounded control-command/state exchange port. No vendor types cross it.
 Repositories: none; existing configuration storage port remains sufficient.

@@ -52,6 +52,7 @@ public:
 #endif
     }
     void maintainActuator(uint32_t now) { damper.update(now); }
+    void verifySafety(uint32_t now) { control.verifyPitSafety(now); }
     void initializeNetwork() {
         display.begin();
         passiveBle.begin();
@@ -109,6 +110,7 @@ void controlLoopTask(void* context) {
         }
         // Acquisition and persistence can advance the clock after a new servo
         // target records its movement time. Never pass that target an older time.
+        app.verifySafety(millis());
         app.maintainActuator(millis());
         vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(20));
     }
