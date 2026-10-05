@@ -42,6 +42,10 @@ class LidOpenDetector:
         # Will be evaluated against current time in update()
         return 0.0
 
+    def configure(self, config: LidDetectorConfig) -> None:
+        """Update settings while retaining an active safety pause."""
+        self._config = config
+
     def reset(self) -> None:
         """Manually clear lid-open suppression and history."""
         self._history.clear()

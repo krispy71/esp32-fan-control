@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from typing import Protocol
+from esp32_fan_control.Domain.configuration import DamperCalibration
 
 
 class DamperActuatorPort(Protocol):
     """Port for controlling physical servo damper aperture."""
+
+    def configure(self, calibration: DamperCalibration) -> None:
+        """Apply validated pulse endpoints and direction."""
+        ...
 
     def set_position(self, position_pct: float) -> None:
         """

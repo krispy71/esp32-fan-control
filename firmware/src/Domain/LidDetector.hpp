@@ -22,6 +22,8 @@ public:
 
     [[nodiscard]] bool isActive() const noexcept { return is_active_; }
 
+    void setConfig(const LidDetectorConfig& config) noexcept { config_ = config; }
+
     void reset() noexcept {
         is_active_ = false;
         triggered_at_ms_ = 0;

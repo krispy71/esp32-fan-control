@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from esp32_fan_control.Domain.telemetry import TelemetrySnapshot
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class DisplayView:
         return self.meat_temp_f is not None and not math.isnan(self.meat_temp_f)
 
     @classmethod
-    def from_telemetry(cls, s: Any) -> DisplayView:
+    def from_telemetry(cls, s: TelemetrySnapshot) -> DisplayView:
         """Construct DisplayView from a TelemetrySnapshot or duck-typed snapshot object."""
         return cls(
             pit_temp_f=s.pit_temp_f,
