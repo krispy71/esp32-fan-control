@@ -83,3 +83,9 @@ The backend owns validation and applies calibration through the actuator port.
 
 Hardware accuracy, mechanical closure, and physical fault shutdown still require the
 bench procedure in [firmware/README.md](../firmware/README.md).
+
+The shipped composition does not configure a cloud trust anchor or a station network.
+MEATER cloud polling therefore stays disabled until an integrator supplies a trusted
+CA certificate and internet connectivity; it never bypasses certificate validation.
+Saving a cloud token alone does not enable cloud connectivity. Wired pit control and
+local BLE acquisition remain independent of that optional integration.

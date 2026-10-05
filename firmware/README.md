@@ -145,7 +145,7 @@ expose only whether it is configured.
 
 ### Repeatable software verification
 
-From the repository root, install `uv`, a C++17 compiler, OpenSSL, and the runtime
+From the repository root, install `uv`, a C++17 compiler, OpenSSL, Node/npm (for browser accessibility checks), and the runtime
 libraries `libcjson.so.1` and `libmbedcrypto.so.7`. Build an ESP32 environment once to
 install its framework headers, then run:
 

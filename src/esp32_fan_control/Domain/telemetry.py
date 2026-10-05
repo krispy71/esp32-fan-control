@@ -18,4 +18,3 @@ class TelemetrySnapshot:
     is_meat_wireless: bool = False
     meat_battery_pct: int | None = None
     meat_probe_name: str = ""
-
