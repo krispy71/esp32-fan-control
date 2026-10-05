@@ -22,3 +22,10 @@ __pycache__/
 *.swp
 *~
 .DS_Store
+
+# Per-device access material (provision outside the repository)
+.device-access/
+**/device-access.json
+**/device-key.pem
+**/device-cert.pem
+**/operator-access.txt

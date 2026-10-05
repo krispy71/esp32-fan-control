@@ -1,5 +1,14 @@
 # Agent UI Architecture Contract
 
+## ESP32 embedded-dashboard exception
+
+On 2026-10-04 the user explicitly approved retaining the existing HTML/CSS/JavaScript
+dashboard in `firmware/data` for the ESP32 remediation work. It is served from flash
+without a Node server, cloud dependency, or runtime package downloads. The prescribed
+Next.js/TypeScript/Tailwind/shadcn stack and `Clients/web` placement do not apply to
+this embedded client. API boundaries, authentication, accessible forms, error/loading
+states, and verification against the real backend still apply.
+
 This contract governs **browser-based user interface** construction. It defines the stack,
 patterns, and structure for web clients that consume backend APIs.
 

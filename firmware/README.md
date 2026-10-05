@@ -60,7 +60,7 @@ firmware/
 | Function | ESP32 GPIO | Peripheral / Mode | Notes |
 | :--- | :---: | :--- | :--- |
 | **Blower Fan Gate** | `GPIO 25` | LEDC Ch 0, 25 kHz PWM | Drives gate of N-MOSFET (AO3400A / IRLZ44N) |
-| **Servo Damper Signal** | `GPIO 26` | LEDC Ch 1, 50 Hz PWM | Connects to RJ45 Pin 6 (MG90S micro-servo) |
+| **Servo Damper Signal** | `GPIO 26` | LEDC Ch 2, 50 Hz PWM | Connects to RJ45 Pin 6 (MG90S micro-servo) |
 | **SPI SCK** | `GPIO 18` | Hardware SPI Clock | Shared clock line for MAX31855 amplifiers |
 | **SPI MISO** | `GPIO 19` | Hardware SPI Data | Shared serial data in from MAX31855 |
 | **CS Pit Thermocouple** | `GPIO 5` | Active-low Chip Select | Dedicated CS for pit/chamber probe |
@@ -70,7 +70,7 @@ firmware/
 
 ## 3. Web Dashboard & REST API Endpoints
 
-The web dashboard is served directly from ESP32 LittleFS flash storage over SoftAP (`SSID: SmokerController`, `Pass: smoker123`) or local Wi-Fi.
+The web dashboard is served over HTTPS from ESP32 LittleFS using a per-device SoftAP and administrator credential. Provision the private access files using [docs/device-access.md](../docs/device-access.md). Unprovisioned firmware keeps web access disabled while wired control remains autonomous.
 
 ### HTTP Endpoints
 
@@ -134,10 +134,10 @@ g++ -std=c++17 -Wall -Wextra -Werror -I firmware/src firmware/test/test_domain.c
 ```
 
 ### Running Local Python Web Simulation
-Launch the desktop simulator with the live web dashboard served at `http://127.0.0.1:8080`:
+Launch the desktop simulator with the live web dashboard served at `https://127.0.0.1:8443`:
 
 ```bash
-uv run python -m esp32_fan_control.Controller.cli --web
+uv run python -m esp32_fan_control.Controller.cli --web --access-dir "$HOME/.local/share/esp32-smoker/device-a"
 ```
 
 ### Compiling Firmware for ESP32 Target
@@ -223,8 +223,8 @@ Step through each subsystem to confirm physical hardware operation:
 - [ ] **Max Speed (100% Demand)**: At 100% demand, confirm the fan runs at full 5V velocity.
 
 #### D. Web Dashboard & Wi-Fi Connectivity
-- [ ] Connect your phone or laptop to the Wi-Fi network `SmokerController` (password: `smoker123`).
-- [ ] Open a browser and navigate to `http://192.168.4.1`.
+- [ ] Connect to the per-device Wi-Fi network listed in your private `operator-access.txt`.
+- [ ] Open a browser and navigate to `https://192.168.4.1`.
 - [ ] Verify the responsive pitmaster dashboard loads with real-time temperature gauges and canvas graph.
 - [ ] Tap the **Setpoint** control, enter `250`, and submit. Verify:
   - Web UI displays new setpoint.

@@ -10,7 +10,7 @@ operational envelopes to be verified through qualification tests.
 
 ## 1. Goal
 
-Provide pitmasters with an autonomous, high-precision temperature regulator for charcoal and wood-fueled smokers. The controller continuously reads chamber (pit) and food (meat) temperatures, modulates active forced airflow via a 12V blower fan, and controls a physical servo-actuated damper to prevent convective chimney run-away and enable fine-grained natural draft regulation at low-and-slow temperatures.
+Provide pitmasters with an autonomous, high-precision temperature regulator for charcoal and wood-fueled smokers. The controller continuously reads chamber (pit) and food (meat) temperatures, modulates active forced airflow via a 5V blower fan, and controls a physical servo-actuated damper to prevent convective chimney run-away and enable fine-grained natural draft regulation at low-and-slow temperatures.
 
 The controller must operate safely and autonomously on the ESP32 microcontroller, remaining completely reliable regardless of Wi-Fi or browser connectivity.
 

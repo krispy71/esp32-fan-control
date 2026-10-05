@@ -137,6 +137,15 @@ The MAX31855 runs on **3.3V logic**. Power both breakout modules from the ESP32 
 | **CS (Pit Module)** | ESP32 `GPIO 5` | Pit Chip Select | Dedicated to Pit sensor |
 | **CS (Meat Module)**| ESP32 `GPIO 21`| Meat Chip Select | Dedicated to Meat sensor |
 
+The default firmware enables only the pit converter. A food probe is optional; enable
+its converter with `-D SMOKER_FOOD_CS=21` in the build flags. Missing food hardware
+must not be reported as a valid food temperature or prevent healthy pit regulation.
+
+For a MAX31856 K-type converter, build the `esp32dev-max31856` environment and also
+connect its `SDI`/`MOSI` input to GPIO 23. SCK, SDO/MISO, and chip-select assignments
+remain as above. Each enabled probe needs its own converter. The selected environment
+configures the MAX31856 for K-type operation; the default environment uses MAX31855K.
+
 ---
 
 ### 3.5 Inland E-Ink Display Module Connections (2.13" or 1.54" SPI e-Paper)
@@ -156,10 +165,11 @@ The Inland E-Ink screen module (Micro Center) operates on **3.3V logic** and com
 | **RST** | White | ESP32 `GPIO 16` | Hardware Reset (Active LOW) | Pulled low briefly on startup to reset display controller |
 | **BUSY** | Purple | ESP32 `GPIO 17` | Busy Status (Active HIGH) | ESP32 polls this input to wait for refresh cycles to finish |
 
-#### Why Bus Sharing with MAX31855 Works Seamlessly
+#### Shared-bus ownership
 * **No Pin Contention**: The MAX31855 thermocouple chips are *read-only* SPI devices that transmit data to the ESP32 on `GPIO 19` (MISO). The Inland E-Ink display is a *write-only* device on `GPIO 23` (MOSI).
 * **Independent Chip Selects**: When the ESP32 reads pit or food temperature, `GPIO 5` or `GPIO 21` is pulled LOW while `GPIO 4` (E-Ink CS) remains HIGH, so the display completely ignores the bus traffic. Conversely, during screen updates, only `GPIO 4` is pulled LOW.
-* **Deterministic Dual-Core Timing**: The real-time 1 Hz PID control loop runs uninterrupted on **FreeRTOS Core 1**. E-Ink refreshes (which take 300–400 ms for partial updates) run exclusively on **Core 0** in the background loop, ensuring zero jitter on temperature sampling or servo positioning.
+* **Serialized SPI frames**: A shared bus owner acquires the bus before any chip-select assertion and releases it after deassertion. Separate data directions do not remove the need to serialize transactions. All three bus pins (SCK18, MISO19, MOSI23) are initialized once.
+* **Task isolation**: Sensor sampling and control run on Core 1; network/display work runs on Core 0. Display busy waits occur outside bus ownership. SPI frame duration still contributes bounded scheduling latency; physical timing requires bench measurement.
 
 ---
 
@@ -204,4 +214,3 @@ If you build **Configuration B** (microcontroller in a tabletop base unit with a
 | **Thermocouple** | Stainless braided K-type probe (pit and meat) | ~$4.00 | Rated up to 800°F (400°C) |
 
 **Total Estimated Hardware Cost: ~$28.00 – $35.00**
-

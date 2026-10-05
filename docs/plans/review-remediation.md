@@ -27,8 +27,8 @@ one optional food converter, existing Python simulator. Physical PWM, probe accu
 and smoker +/-2F qualification require a bench; host evidence will not claim them.
 
 Non-goals: CAD redesign, deployment/flashing, cloud product expansion, unrelated UI
-redesign. The embedded dashboard versus prescribed Next.js stack is awaiting the
-user's explicit choice; independent firmware implementation proceeds meanwhile.
+redesign. The user explicitly approved retaining the embedded HTML/JavaScript
+dashboard as an exception to the prescribed Next.js stack on October 4.
 
 ## Architecture plan
 
@@ -43,7 +43,7 @@ Adapters: isolated SPI owner; corrected actuators, MAX converters, NVS, bounded 
 exchange; authenticated web boundary with structured parsing and redacted outputs.
 Controller: construct application ownership after Arduino initialization; wire ports and
 schedule control/network tasks, without mutable namespace-level service dependencies.
-Client UI: authenticated requests and calibration form; stack decision pending.
+Client UI: authenticated requests and calibration form in the existing embedded assets.
 Tests: production C++ domain/service regression, Arduino driver spies and startup
 harness, real simulator HTTP/browser tests, strict host compile and ESP32 build.
 
