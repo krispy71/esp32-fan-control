@@ -6,6 +6,8 @@ import argparse
 import sys
 import time
 from esp32_fan_control.Adapters.web_server_adapter import WebServerAdapter
+from esp32_fan_control.Adapters.control_channel_adapter import ThreadedControlChannel
+from esp32_fan_control.Domain.configuration import DamperCalibration
 from esp32_fan_control.Domain.temperature import SensorFault, SensorRole, TemperatureReading
 from esp32_fan_control.Services.Ports.actuator_ports import BlowerActuatorPort, DamperActuatorPort
 from esp32_fan_control.Services.Ports.sensor_port import TemperatureSensorPort
@@ -17,6 +19,9 @@ class ConsoleActuator(DamperActuatorPort, BlowerActuatorPort):
     def __init__(self) -> None:
         self.damper_pct: float = 0.0
         self.blower_pct: float = 0.0
+
+    def configure(self, calibration: DamperCalibration) -> None:
+        self.calibration = calibration
 
     def set_position(self, position_pct: float) -> None:
         self.damper_pct = position_pct
@@ -55,7 +60,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ESP32 Smoker Controller Simulation & Web Server")
     parser.add_argument("--web", action="store_true", help="Start local web dashboard")
     parser.add_argument("--host", default="127.0.0.1", help="Web server host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8080, help="Web server port (default: 8080)")
+    parser.add_argument("--port", type=int, default=8443, help="HTTPS port (default: 8443)")
+    parser.add_argument("--access-dir", help="Private HTTPS provisioning directory (required with --web)")
     parser.add_argument("--setpoint", type=float, default=None, help="Override target setpoint °F")
     parser.add_argument("--config-file", default="smoker_config.json", help="Path to config JSON file")
     parser.add_argument("--cycles", type=int, default=0, help="Number of cycles to run (0 = infinite)")
@@ -91,6 +97,7 @@ def main() -> None:
     actuator = ConsoleActuator()
     telemetry = ConsoleTelemetry()
 
+    channel = ThreadedControlChannel()
     service = SmokerControlService(
         sensor_port=sensor,
         damper_port=actuator,
@@ -98,17 +105,25 @@ def main() -> None:
         telemetry_port=telemetry,
         target_setpoint_f=args.setpoint if args.setpoint is not None else 225.0,
         config_storage=config_storage,
+        control_channel=channel,
     )
+
+    service.initialize()
 
     if args.setpoint is not None:
         service.setpoint_f = args.setpoint
 
     web_server = None
     if args.web:
-        web_server = WebServerAdapter(service=service, host=args.host, port=args.port)
-        web_server.start(background=True)
-        print(f"[Web] Dashboard live at: http://{args.host}:{web_server.port}")
-        print("[Web] Serving real-time telemetry, controls, and canvas trend graph.")
+        web_server = WebServerAdapter(channel=channel, host=args.host, port=args.port, access_dir=args.access_dir)
+        try:
+            web_server.start(background=True)
+        except (OSError, ValueError):
+            print("[Web] HTTPS disabled: valid private provisioning is required. Control continues.")
+            web_server = None
+        if web_server:
+            print(f"[Web] Dashboard live at: https://{args.host}:{web_server.port}")
+            print("[Web] Serving real-time telemetry, controls, and canvas trend graph.")
 
     print("\nStarting control loop (Press Ctrl+C to exit)...")
     t = 0.0

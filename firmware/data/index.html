@@ -15,7 +15,8 @@
         <h1>Smoker Controller</h1>
       </div>
       <div class="header-status">
-        <span id="connection-badge" class="badge badge-online">Connected</span>
+        <button type="button" id="theme-toggle" class="btn btn-preset" aria-label="Switch color theme">Theme</button>
+        <span id="connection-badge" class="badge badge-warning" role="status">Connecting…</span>
         <span id="system-state" class="badge badge-state">INITIALIZING</span>
       </div>
     </header>
@@ -71,7 +72,7 @@
               <span>Mechanical Damper</span>
               <span id="damper-val" class="actuator-percent">0%</span>
             </div>
-            <div class="progress-bar-bg" role="progressbar" id="damper-progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="progress-bar-bg" role="progressbar" aria-label="Damper opening" id="damper-progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div id="damper-bar" class="progress-bar-fill fill-damper" style="width: 0%;"></div>
             </div>
             <div class="actuator-meta">
@@ -83,10 +84,10 @@
           <!-- Blower Fan Gauge -->
           <div class="actuator-item">
             <div class="actuator-title">
-              <span>12V/5V Blower Fan</span>
+              <span>5V Blower Fan</span>
               <span id="blower-val" class="actuator-percent">0%</span>
             </div>
-            <div class="progress-bar-bg" role="progressbar" id="blower-progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="progress-bar-bg" role="progressbar" aria-label="Blower speed" id="blower-progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div id="blower-bar" class="progress-bar-fill fill-blower" style="width: 0%;"></div>
             </div>
             <div class="actuator-meta">
@@ -105,9 +106,9 @@
         <form id="setpoint-form" class="controls-body" onsubmit="event.preventDefault(); submitSetpoint();">
           <div class="slider-row">
             <label for="setpoint-slider" class="sr-only">Target Temperature</label>
-            <input type="range" id="setpoint-slider" min="150" max="400" step="5" value="225" oninput="syncSliderToInput(this.value)">
+            <input type="range" id="setpoint-slider" min="100" max="450" step="5" value="225" oninput="syncSliderToInput(this.value)">
             <div class="input-with-button">
-              <input type="number" id="setpoint-input" min="150" max="400" step="1" value="225" oninput="syncInputToSlider(this.value)">
+              <input type="number" id="setpoint-input" aria-label="Target temperature in Fahrenheit" min="100" max="450" required step="1" value="225" oninput="syncInputToSlider(this.value)">
               <span class="unit-label">&deg;F</span>
               <button type="submit" class="btn btn-primary">Set</button>
             </div>
@@ -127,31 +128,44 @@
               Pause for Lid Opening
             </button>
           </div>
+          <p id="control-msg" role="status" aria-live="polite"></p>
         </form>
       </section>
 
       <!-- Advanced Tuning & Persistence (NVS) -->
       <section class="card settings-card" aria-labelledby="settings-heading">
         <div class="card-header">
-          <h2 id="settings-heading">Controller Tuning & Storage (NVS)</h2>
-          <span id="storage-status-badge" class="badge badge-state">Flash Synced</span>
+          <h2 id="settings-heading">Controller Tuning & Calibration</h2>
+          <span id="storage-status-badge" class="badge badge-state">Loading storage…</span>
         </div>
         <form id="tuning-form" class="tuning-grid" onsubmit="event.preventDefault(); submitTuningConfig();">
           <div class="setting-item">
             <label for="cfg-kp">Proportional (Kp)</label>
-            <input type="number" id="cfg-kp" min="0.1" max="50" step="0.1" value="3.0">
+            <input type="number" id="cfg-kp" min="0" max="100" step="0.1" value="3.0">
           </div>
           <div class="setting-item">
             <label for="cfg-ki">Integral (Ki)</label>
-            <input type="number" id="cfg-ki" min="0.0" max="2.0" step="0.005" value="0.02">
+            <input type="number" id="cfg-ki" min="0.0" max="10" step="0.005" value="0.02">
           </div>
           <div class="setting-item">
             <label for="cfg-kd">Derivative (Kd)</label>
-            <input type="number" id="cfg-kd" min="0" max="100" step="0.5" value="15.0">
+            <input type="number" id="cfg-kd" min="0" max="500" step="0.5" value="15.0">
           </div>
           <div class="setting-item">
             <label for="cfg-threshold">Fan Threshold (%)</label>
-            <input type="number" id="cfg-threshold" min="15" max="80" step="1" value="40">
+            <input type="number" id="cfg-threshold" min="10" max="90" step="1" value="40">
+          </div>
+          <div class="setting-item">
+            <label for="cfg-servo-min">Servo minimum pulse (µs)</label>
+            <input type="number" id="cfg-servo-min" min="500" max="2500" step="1" value="1000" required aria-describedby="calibration-help save-msg">
+          </div>
+          <div class="setting-item">
+            <label for="cfg-servo-max">Servo maximum pulse (µs)</label>
+            <input type="number" id="cfg-servo-max" min="500" max="2500" step="1" value="2000" required aria-describedby="calibration-help save-msg">
+          </div>
+          <div class="setting-item setting-wide">
+            <label for="cfg-servo-inverted"><input type="checkbox" id="cfg-servo-inverted"> Reverse servo direction</label>
+            <p id="calibration-help">Set limits between 500 and 2500 µs, with minimum below maximum. Reversing swaps which endpoint closes the damper.</p>
           </div>
           <div class="setting-item setting-wide">
             <label for="cfg-meat-mode">Meat Probe Source</label>
@@ -164,15 +178,17 @@
           </div>
           <div id="meater-cloud-group" class="setting-item setting-wide" style="display: none;">
             <label for="cfg-meater-token">MEATER Cloud API Token</label>
-            <input type="password" id="cfg-meater-token" placeholder="Bearer JWT from public-api.cloud.meater.com">
+            <input type="password" id="cfg-meater-token" maxlength="95" autocomplete="off" aria-describedby="token-status" placeholder="Enter a replacement token">
+            <p id="token-status">Loading token status…</p>
+            <label for="cfg-clear-token"><input type="checkbox" id="cfg-clear-token"> Remove the saved token</label>
           </div>
           <div id="meater-mac-group" class="setting-item setting-wide" style="display: none;">
             <label for="cfg-meater-mac">MEATER Target MAC (Optional)</label>
-            <input type="text" id="cfg-meater-mac" placeholder="AA:BB:CC:DD:EE:FF (Leave blank for auto-detect)">
+            <input type="text" id="cfg-meater-mac" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF (Leave blank for auto-detect)">
           </div>
           <div class="setting-actions">
             <button type="submit" class="btn btn-secondary">Save to Flash Storage</button>
-            <span id="save-msg" class="save-indicator"></span>
+            <span id="save-msg" class="save-indicator" role="status" aria-live="polite"></span>
           </div>
         </form>
       </section>
@@ -188,7 +204,7 @@
           </div>
         </div>
         <div class="chart-container">
-          <canvas id="trendChart" width="800" height="240"></canvas>
+          <canvas id="trendChart" width="800" height="240" role="img" aria-label="Recent pit, target, and food temperatures">Current temperatures are shown above.</canvas>
         </div>
       </section>
     </main>

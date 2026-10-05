@@ -534,3 +534,36 @@ canvas {
   clip: rect(0, 0, 0, 0);
   border: 0;
 }
+
+/* Calibration fields and asynchronous feedback share the existing form layout. */
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #38bdf8; outline-offset: 3px; }
+button:disabled { opacity: 0.6; cursor: wait; }
+.setting-item input[type="checkbox"] { width: auto; margin-right: 8px; }
+#calibration-help, #token-status { margin: 8px 0 0; color: #cbd5e1; font-size: 0.875rem; }
+#save-msg, #control-msg { color: #e2e8f0; overflow-wrap: anywhere; }
+
+:root { --bg-surface-elevated: var(--bg-elevated); --text-muted: #a0aab5; --accent-warning: #fb7185; }
+.btn-primary { color: #16181c; }
+.header-status, .setting-actions, .footer { flex-wrap: wrap; }
+.setting-item, .input-with-button { min-width: 0; }
+.setting-item select { width: 100%; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-primary: #f1f5f9; --bg-card: #ffffff; --bg-card-hover: #e2e8f0;
+  --bg-elevated: #edf2f7; --text-primary: #152337; --text-secondary: #43546b;
+  --text-muted: #4b5b70; --border-subtle: #a3afbf; --accent-fire: #b43c0b;
+  --accent-amber: #7a4700; --accent-damper: #08667f; --accent-success: #0d7166;
+  --accent-warning: #a81632;
+}
+:root[data-theme="light"] .btn-primary { background: #b43c0b; color: #fff; }
+:root[data-theme="light"] .badge, :root[data-theme="light"] #pit-delta,
+:root[data-theme="light"] #fan-rpm-status { color: #263d54 !important; }
+#calibration-help, #token-status, #save-msg, #control-msg { color: var(--text-primary); }
+@media (max-width: 520px) {
+  .header, .card-header { flex-wrap: wrap; gap: 8px; }
+  .header-status { gap: 8px; }
+  .quick-presets { flex-wrap: wrap; }
+  .setting-actions { align-items: flex-start; }
+}
+
+#airflow-mode-badge { color: var(--text-primary) !important; }

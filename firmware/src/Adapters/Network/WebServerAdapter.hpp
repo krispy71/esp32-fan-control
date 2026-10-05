@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef ARDUINO
 #include <Arduino.h>
