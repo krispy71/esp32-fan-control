@@ -318,8 +318,34 @@ static void legacyRevisionMigration() {
     assert(!reboot.submit(migrated.state().config_version, 1000).last_command_accepted);
 }
 
+static void originalScalarMigration() {
+    Preferences prefs;
+    assert(prefs.begin("rev-scalar", false));
+    assert(prefs.putFloat("setpoint", 285) == sizeof(float));
+    assert(prefs.putFloat("kp", 7) == sizeof(float));
+    assert(prefs.putFloat("ki", 0.08f) == sizeof(float));
+    assert(prefs.putFloat("kd", 22) == sizeof(float));
+    assert(prefs.putFloat("thresh", 55) == sizeof(float));
+    assert(prefs.putFloat("lid_drop", 25) == sizeof(float));
+    assert(prefs.putUInt("lid_ms", 240000) == sizeof(uint32_t));
+    prefs.end();
+    Adapters::Storage::ESP32NVSConfigAdapter legacy("rev-scalar");
+    RevisionRuntime migrated(legacy); // Real initialize loads scalars and reserves in a v2 blob.
+    assert(Spy::nvs.count("rev-scalarconfig_v2") == 1);
+    Adapters::Storage::ESP32NVSConfigAdapter fresh("rev-scalar");
+    RevisionRuntime reboot(fresh);
+    for (const auto* runtime : {&migrated, &reboot}) {
+        const auto& cfg = runtime->service.config();
+        assert(cfg.setpoint_f == 285 && cfg.pid_kp == 7 && cfg.pid_ki == 0.08f && cfg.pid_kd == 22);
+        assert(cfg.airflow_threshold_pct == 55 && cfg.lid_drop_threshold_deg == 25);
+        assert(cfg.lid_pause_duration_ms == 240000);
+        assert(cfg.servo_min_pulse_us == 1000 && cfg.servo_max_pulse_us == 2000 && !cfg.servo_inverted);
+    }
+    assert(reboot.state().config_version > migrated.state().config_version);
+}
+
 int main() {
     actuatorStartupAndIdle(); spiFramesAndFaults(); max56(); max56ConfigurationFailure(); persistenceAndServiceStartup(); boundedChannel();
-    durableConfigurationRevisions(); revisionReadFailurePreservesCalibration(); legacyRevisionMigration();
+    durableConfigurationRevisions(); revisionReadFailurePreservesCalibration(); legacyRevisionMigration(); originalScalarMigration();
     std::cout << "Arduino hardware spies: all scenarios passed\n";
 }
