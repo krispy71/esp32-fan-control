@@ -367,7 +367,7 @@ static int testBLEProbeAdapter() {
 
     // Test MAC filtering
     ble.setTargetMac("11:22:33:44:55:66");
-    TEST_ASSERT(std::strcmp(ble.targetMac(), "11:22:33:44:55:66") == 0, "Target MAC should match");
+    TEST_ASSERT(std::strcmp(ble.targetMac().c_str(), "11:22:33:44:55:66") == 0, "Target MAC should match");
     bool filtered = ble.processAdvertisement(meater_payload, sizeof(meater_payload), "AA:BB:CC:DD:EE:FF", 41000);
     TEST_ASSERT(!filtered, "Advertisement with different MAC must be rejected");
 
@@ -575,8 +575,9 @@ static int testDisplayViewAndInlandEInkAdapter() {
     TEST_ASSERT(v_fault.hasSignificantChange(view), "Sensor fault must trigger significant change");
 
     // 2. Test InlandEInkAdapter (2.13-inch model)
+    Adapters::Hardware::SharedSpiBus spi_bus;
     Adapters::Display::InlandEInkAdapter adapter2_13(
-        4, 22, 16, 17, 18, 23,
+        spi_bus, 4, 22, 16, 17,
         Adapters::Display::EInkModel::Inland_2_13_Inch
     );
     TEST_ASSERT(adapter2_13.width() == 250, "2.13 width must be 250");
@@ -622,7 +623,7 @@ static int testDisplayViewAndInlandEInkAdapter() {
 
     // 5. Test 1.54-inch model instantiation and dimensions
     Adapters::Display::InlandEInkAdapter adapter1_54(
-        4, 22, 16, 17, 18, 23,
+        spi_bus, 4, 22, 16, 17,
         Adapters::Display::EInkModel::Inland_1_54_Inch
     );
     TEST_ASSERT(adapter1_54.width() == 200, "1.54 width must be 200");
