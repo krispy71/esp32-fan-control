@@ -17,6 +17,8 @@
 #include "../src/Adapters/Sensors/CompositeSensorAdapter.hpp"
 #include "../src/Adapters/Network/WebServerAdapter.hpp"
 #include "../src/Adapters/Storage/ESP32NVSConfigAdapter.hpp"
+#include "../src/Domain/DisplayView.hpp"
+#include "../src/Adapters/Display/InlandEInkAdapter.hpp"
 #include "../src/Services/SmokerControlService.hpp"
 
 using namespace SmokerController;
@@ -542,6 +544,119 @@ static int testMeaterAdaptersAndMultiModeRouting() {
     return 0;
 }
 
+static int testDisplayViewAndInlandEInkAdapter() {
+    // 1. Test Domain DisplayView conversion from TelemetrySnapshot
+    Services::Ports::TelemetrySnapshot snap{
+        12345, // timestamp_ms
+        225.4f, // pit_temp_f
+        165.2f, // meat_temp_f
+        225.0f, // setpoint_f
+        75.0f,  // damper_position_pct
+        40.0f,  // blower_speed_pct
+        55.0f,  // demand_pct
+        true,   // is_pit_valid
+        true,   // is_meat_valid
+        false,  // lid_open
+        "SMOKING",
+        true,   // is_meat_wireless
+        85,     // meat_battery_pct
+        "MEATER_PLUS"
+    };
+
+    auto view = Domain::DisplayView::fromTelemetry(snap);
+    TEST_ASSERT(std::abs(view.pit_temp_f - 225.4f) < 0.01f, "Pit temp should match telemetry");
+    TEST_ASSERT(std::abs(view.meat_temp_f - 165.2f) < 0.01f, "Meat temp should match telemetry");
+    TEST_ASSERT(std::abs(view.setpoint_f - 225.0f) < 0.01f, "Setpoint should match telemetry");
+    TEST_ASSERT(view.is_meat_wireless == true, "Wireless meat flag should match");
+    TEST_ASSERT(view.meat_battery_pct == 85, "Battery percentage should match");
+    TEST_ASSERT(std::strcmp(view.meat_probe_name, "MEATER_PLUS") == 0, "Probe name should match");
+
+    char pit_buf[32];
+    view.formatPit(pit_buf, sizeof(pit_buf));
+    TEST_ASSERT(std::strcmp(pit_buf, "225.4 F") == 0, "Formatted pit should be '225.4 F'");
+
+    char meat_buf[32];
+    view.formatMeat(meat_buf, sizeof(meat_buf));
+    TEST_ASSERT(std::strcmp(meat_buf, "165.2 F") == 0, "Formatted meat should be '165.2 F'");
+
+    // Test significant change detection
+    auto v_small_drift = view;
+    v_small_drift.pit_temp_f = 225.6f; // +0.2 deg F (< 0.5 threshold)
+    TEST_ASSERT(!v_small_drift.hasSignificantChange(view), "Drift < 0.5F should not trigger significant change");
+
+    auto v_big_drift = view;
+    v_big_drift.pit_temp_f = 226.1f; // +0.7 deg F (>= 0.5 threshold)
+    TEST_ASSERT(v_big_drift.hasSignificantChange(view), "Drift >= 0.5F must trigger significant change");
+
+    auto v_lid = view;
+    v_lid.lid_open = true;
+    TEST_ASSERT(v_lid.hasSignificantChange(view), "Lid open transition must trigger significant change");
+
+    auto v_fault = view;
+    v_fault.pit_valid = false;
+    TEST_ASSERT(v_fault.hasSignificantChange(view), "Sensor fault must trigger significant change");
+
+    // 2. Test InlandEInkAdapter (2.13-inch model)
+    Adapters::Display::InlandEInkAdapter adapter2_13(
+        4, 22, 16, 17, 18, 23,
+        Adapters::Display::EInkModel::Inland_2_13_Inch
+    );
+    TEST_ASSERT(adapter2_13.width() == 250, "2.13 width must be 250");
+    TEST_ASSERT(adapter2_13.height() == 122, "2.13 height must be 122");
+    TEST_ASSERT(adapter2_13.bufferSize() == 32 * 122, "2.13 buffer size must be 3904 bytes");
+
+    adapter2_13.begin();
+    TEST_ASSERT(adapter2_13.refreshCount() == 0, "Initial refresh count should be 0");
+
+    // Initial render
+    adapter2_13.render(view, true);
+    TEST_ASSERT(adapter2_13.refreshCount() == 1, "Refresh count should increment to 1 after render");
+
+    // Verify drawing into framebuffer: header line at Y=15 should be black
+    TEST_ASSERT(adapter2_13.getPixel(10, 15) == Adapters::Display::InlandEInkAdapter::COLOR_BLACK,
+                "Header divider line pixel must be black");
+    // Background pixel outside drawings should be white
+    TEST_ASSERT(adapter2_13.getPixel(1, 1) == Adapters::Display::InlandEInkAdapter::COLOR_WHITE,
+                "Corner background should be white");
+
+    // 3. Test Cooldown and Update logic
+    // Calling update at same timestamp (0 ms elapsed) should be rejected by cooldown
+    adapter2_13.update(12345, v_big_drift);
+    TEST_ASSERT(adapter2_13.refreshCount() == 1, "Immediate update must be suppressed by cooldown");
+
+    // Calling update after 15 seconds with significant change should trigger refresh
+    adapter2_13.update(12345 + 15000, v_big_drift);
+    TEST_ASSERT(adapter2_13.refreshCount() == 2, "Update after cooldown with change must refresh");
+
+    // Calling update after 5 seconds without change should be suppressed
+    adapter2_13.update(12345 + 20000, v_big_drift);
+    TEST_ASSERT(adapter2_13.refreshCount() == 2, "Unchanged update should be suppressed");
+
+    // Calling update after 35 seconds (heartbeat) should trigger refresh
+    adapter2_13.update(12345 + 15000 + 35000, v_big_drift);
+    TEST_ASSERT(adapter2_13.refreshCount() == 3, "Heartbeat interval must trigger refresh");
+
+    // 4. Test Telemetry Publisher interface
+    snap.pit_temp_f = 230.0f;
+    snap.timestamp_ms = 12345 + 15000 + 35000 + 15000;
+    adapter2_13.publish(snap);
+    TEST_ASSERT(adapter2_13.refreshCount() == 4, "Publishing telemetry after cooldown must refresh display");
+
+    // 5. Test 1.54-inch model instantiation and dimensions
+    Adapters::Display::InlandEInkAdapter adapter1_54(
+        4, 22, 16, 17, 18, 23,
+        Adapters::Display::EInkModel::Inland_1_54_Inch
+    );
+    TEST_ASSERT(adapter1_54.width() == 200, "1.54 width must be 200");
+    TEST_ASSERT(adapter1_54.height() == 200, "1.54 height must be 200");
+    adapter1_54.begin();
+    adapter1_54.render(view, true);
+    TEST_ASSERT(adapter1_54.refreshCount() == 1, "1.54 adapter must render cleanly");
+
+    std::cout << "  [PASS] testDisplayViewAndInlandEInkAdapter\n";
+    return 0;
+}
+
 int main() {
     std::cout << "Running C++ Domain & Service Test Suite...\n";
     if (testTemperatureDomain() != 0) return 1;
@@ -557,7 +672,8 @@ int main() {
     if (testCompositeSensor() != 0) return 1;
     if (testMeaterGattAndCloudDecoding() != 0) return 1;
     if (testMeaterAdaptersAndMultiModeRouting() != 0) return 1;
+    if (testDisplayViewAndInlandEInkAdapter() != 0) return 1;
 
-    std::cout << "\nALL 13 C++ TEST SUITES PASSED CLEANLY!\n";
+    std::cout << "\nALL 14 C++ TEST SUITES PASSED CLEANLY!\n";
     return 0;
 }

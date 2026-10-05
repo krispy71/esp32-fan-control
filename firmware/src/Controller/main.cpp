@@ -16,6 +16,7 @@
 #include "../Adapters/Telemetry/SerialTelemetryAdapter.hpp"
 #include "../Adapters/Network/WebServerAdapter.hpp"
 #include "../Adapters/Storage/ESP32NVSConfigAdapter.hpp"
+#include "../Adapters/Display/InlandEInkAdapter.hpp"
 #include "../Services/SmokerControlService.hpp"
 
 using namespace SmokerController;
@@ -23,15 +24,29 @@ using namespace SmokerController;
 // Hardware Pin Configuration
 static constexpr uint8_t PIN_BLOWER_PWM = 25; // 5V N-MOSFET gate
 static constexpr uint8_t PIN_SERVO_PWM  = 26; // 5V Servo signal (RJ45 Pin 6)
-static constexpr uint8_t PIN_SPI_SCK    = 18; // MAX31855 SPI Clock
+static constexpr uint8_t PIN_SPI_SCK    = 18; // Shared SPI Clock (MAX31855 & E-Ink)
 static constexpr uint8_t PIN_SPI_MISO   = 19; // MAX31855 SPI Data Out
+static constexpr uint8_t PIN_SPI_MOSI   = 23; // Inland E-Ink SPI Data In (DIN)
 static constexpr uint8_t PIN_CS_PIT     = 5;  // MAX31855 Chip Select (Pit Probe)
 static constexpr uint8_t PIN_CS_FOOD1   = 21; // MAX31855 Chip Select (Food Probe 1)
+static constexpr uint8_t PIN_EINK_CS    = 4;  // Inland E-Ink Chip Select
+static constexpr uint8_t PIN_EINK_DC    = 22; // Inland E-Ink Data/Command Control
+static constexpr uint8_t PIN_EINK_RST   = 16; // Inland E-Ink Reset
+static constexpr uint8_t PIN_EINK_BUSY  = 17; // Inland E-Ink Busy Output
 
 // Concrete Adapters
 static Adapters::Actuators::ESP32PWMBlowerAdapter blowerAdapter(PIN_BLOWER_PWM, 0);
 static Adapters::Actuators::ESP32ServoDamperAdapter damperAdapter(PIN_SERVO_PWM, 1);
 static Adapters::Sensors::MAX31855SensorAdapter wiredSensorAdapter(PIN_CS_PIT, PIN_CS_FOOD1, PIN_SPI_SCK, PIN_SPI_MISO);
+static Adapters::Display::InlandEInkAdapter einkAdapter(
+    PIN_EINK_CS,
+    PIN_EINK_DC,
+    PIN_EINK_RST,
+    PIN_EINK_BUSY,
+    PIN_SPI_SCK,
+    PIN_SPI_MOSI,
+    Adapters::Display::EInkModel::Inland_2_13_Inch
+);
 static Adapters::Sensors::BLEProbeAdapter bleProbeAdapter(30000);
 static Adapters::Sensors::MeaterBleClientAdapter meaterDirectAdapter(30000);
 static Adapters::Sensors::MeaterCloudAdapter meaterCloudAdapter(60000, 20000);
@@ -86,6 +101,7 @@ void setup() {
     blowerAdapter.begin();
     damperAdapter.begin();
     wiredSensorAdapter.begin();
+    einkAdapter.begin();
     bleProbeAdapter.begin();
     meaterDirectAdapter.begin();
     webServerAdapter.begin("SmokerController", "smoker123");
@@ -117,12 +133,13 @@ void setup() {
 
 void loop() {
     uint32_t now = millis();
-    // Core 0 loop: Housekeeping, Web Requests, BLE/Cloud polling & Servo Idle-Detach check
+    // Core 0 loop: Housekeeping, Web Requests, BLE/Cloud polling, Display & Servo Idle-Detach check
     webServerAdapter.update();
     bleProbeAdapter.update(now);
     meaterDirectAdapter.update(now);
     meaterCloudAdapter.update(now);
     damperAdapter.update(now);
+    einkAdapter.update(now, Domain::DisplayView::fromTelemetry(controlService.lastTelemetry()));
 
     // Keep active sensor routing synced with live config
     const auto& cfg = controlService.config();
@@ -139,8 +156,10 @@ int main() {
     std::cout << "ESP32 Smoker Controller — Native Host Build\n";
     bleProbeAdapter.begin();
     meaterDirectAdapter.begin();
+    einkAdapter.begin();
     webServerAdapter.begin();
     webServerAdapter.update();
+    einkAdapter.update(1000, Domain::DisplayView::fromTelemetry(controlService.lastTelemetry()));
     std::cout << "Native Host initialization verified cleanly.\n";
     return 0;
 }

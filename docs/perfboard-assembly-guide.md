@@ -129,6 +129,20 @@ Run thin insulated wire (28–30 AWG Kynar or silicone hookup wire) on the botto
 8. **SPI SO (MISO)**: Jumper from ESP32 `GPIO 19` at **(M, 10)** to MAX31855 `SO` at **(K, 21)**.
 9. **SPI CS Pit**: Jumper from ESP32 `GPIO 5` at **(M, 12)** to MAX31855 `CS` at **(L, 21)**.
 
+### Phase 5.1: Optional Inland E-Ink Screen Harness (Lid-Mounted)
+If installing an Inland 2.13" or 1.54" e-Paper display in the electronics lid, run an 8-wire ribbon cable or DuPont harness from the following ESP32 socket pins:
+
+| E-Ink Header Pin | ESP32 Board Pin | Grid Coord | Function |
+| :--- | :--- | :---: | :--- |
+| **1. VCC** | `3V3` | **(M, 19)** | 3.3V Logic Supply |
+| **2. GND** | `GND` | **(M, 18)** | Common Ground |
+| **3. DIN / MOSI**| `GPIO 23` | **(M, 5)** | Master-Out-Slave-In |
+| **4. CLK / SCK** | `GPIO 18` | **(M, 11)** | SPI Clock (shared with MAX31855) |
+| **5. CS** | `GPIO 4` | **(C, 16)** | E-Ink Chip Select |
+| **6. DC** | `GPIO 22` | **(M, 6)** | Data / Command Select |
+| **7. RST** | `GPIO 16` | **(C, 14)** | Hardware Reset |
+| **8. BUSY** | `GPIO 17` | **(C, 15)** | Busy Status |
+
 ---
 
 ## 6. Pre-Flight Multimeter Inspection (Do NOT plug in ESP32 yet!)
