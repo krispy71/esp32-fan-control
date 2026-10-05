@@ -143,6 +143,7 @@ private:
         auto* current = session(server, fd);
         if (!current || esp_timer_get_time() >= current->deadline) return HTTPD_SOCK_ERR_TIMEOUT;
         const int result = esp_tls_conn_write(current->tls, data, size);
+        if (esp_timer_get_time() >= current->deadline) return HTTPD_SOCK_ERR_TIMEOUT;
         return result < 0 ? HTTPD_SOCK_ERR_FAIL : result;
     }
     static int pending(httpd_handle_t server, int fd) {
