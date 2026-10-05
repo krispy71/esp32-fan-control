@@ -1,6 +1,7 @@
 """Bounded, thread-safe command and snapshot handoff."""
 
 from typing import Protocol
+
 from esp32_fan_control.Domain.control import ControlCommand, ControlState
 
 

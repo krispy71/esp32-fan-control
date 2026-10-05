@@ -44,10 +44,10 @@ struct DisplayView {
         v.meat_battery_pct = s.meat_battery_pct;
         v.timestamp_ms = s.timestamp_ms;
 
-            std::strncpy(v.status, s.status, sizeof(v.status) - 1);
-            v.status[sizeof(v.status) - 1] = '\0';
-            std::strncpy(v.meat_probe_name, s.meat_probe_name, sizeof(v.meat_probe_name) - 1);
-            v.meat_probe_name[sizeof(v.meat_probe_name) - 1] = '\0';
+        std::strncpy(v.status, s.status, sizeof(v.status) - 1);
+        v.status[sizeof(v.status) - 1] = '\0';
+        std::strncpy(v.meat_probe_name, s.meat_probe_name, sizeof(v.meat_probe_name) - 1);
+        v.meat_probe_name[sizeof(v.meat_probe_name) - 1] = '\0';
         return v;
     }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Protocol
+
 from esp32_fan_control.Domain.configuration import DamperCalibration
 
 

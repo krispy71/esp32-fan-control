@@ -93,6 +93,7 @@ def test_service_persistence_workflow(tmp_path: Path) -> None:
         blower_port=actuator,
         config_storage=adapter,
     )
+    service1.initialize()
     assert service1.setpoint_f == 225.0
 
     # 2. Pitmaster updates setpoint to 250°F
@@ -107,6 +108,7 @@ def test_service_persistence_workflow(tmp_path: Path) -> None:
         blower_port=actuator,
         config_storage=adapter,
     )
+    service2.initialize()
     # Target setpoint MUST persist across reboot!
     assert service2.setpoint_f == 250.0
     assert service2.config.setpoint_f == 250.0

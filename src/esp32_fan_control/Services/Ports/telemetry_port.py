@@ -1,6 +1,7 @@
 """Telemetry publishing boundary."""
 
 from typing import Protocol
+
 from esp32_fan_control.Domain.telemetry import TelemetrySnapshot
 
 

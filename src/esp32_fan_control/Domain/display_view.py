@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+
 from esp32_fan_control.Domain.telemetry import TelemetrySnapshot
 
 
@@ -29,29 +30,29 @@ class DisplayView:
     @property
     def pit_valid(self) -> bool:
         """Whether pit sensor reading is valid and finite."""
-        return self.pit_temp_f is not None and not math.isnan(self.pit_temp_f)
+        return self.pit_temp_f is not None and math.isfinite(self.pit_temp_f)
 
     @property
     def meat_valid(self) -> bool:
         """Whether meat sensor reading is valid and finite."""
-        return self.meat_temp_f is not None and not math.isnan(self.meat_temp_f)
+        return self.meat_temp_f is not None and math.isfinite(self.meat_temp_f)
 
     @classmethod
     def from_telemetry(cls, s: TelemetrySnapshot) -> DisplayView:
-        """Construct DisplayView from a TelemetrySnapshot or duck-typed snapshot object."""
+        """Construct a display value from the domain telemetry snapshot."""
         return cls(
             pit_temp_f=s.pit_temp_f,
             meat_temp_f=s.meat_temp_f,
             setpoint_f=float(s.setpoint_f),
             damper_pct=float(s.damper_position_pct),
             blower_pct=float(s.blower_speed_pct),
-            demand_pct=float(getattr(s, "demand_pct", 0.0)),
+            demand_pct=s.demand_pct,
             lid_open=bool(s.lid_open),
             status=str(s.status),
-            is_meat_wireless=bool(getattr(s, "is_meat_wireless", False)),
-            meat_battery_pct=getattr(s, "meat_battery_pct", None),
-            meat_probe_name=str(getattr(s, "meat_probe_name", "")),
-            timestamp_s=float(getattr(s, "timestamp_s", 0.0)),
+            is_meat_wireless=s.is_meat_wireless,
+            meat_battery_pct=s.meat_battery_pct,
+            meat_probe_name=s.meat_probe_name,
+            timestamp_s=s.timestamp_s,
         )
 
     def has_significant_change(
@@ -75,21 +76,18 @@ class DisplayView:
         if abs(self.setpoint_f - prev.setpoint_f) >= 0.5:
             return True
 
-        if self.pit_valid and prev.pit_valid:
-            if abs(self.pit_temp_f - prev.pit_temp_f) >= temp_thresh:  # type: ignore[operator]
-                return True
-
-        if self.meat_valid and prev.meat_valid:
-            if abs(self.meat_temp_f - prev.meat_temp_f) >= temp_thresh:  # type: ignore[operator]
-                return True
-
-        if (
-            abs(self.damper_pct - prev.damper_pct) >= output_thresh
-            or abs(self.blower_pct - prev.blower_pct) >= output_thresh
-        ):
+        if (self.pit_valid and prev.pit_valid
+                and abs(self.pit_temp_f - prev.pit_temp_f) >= temp_thresh):  # type: ignore[operator]
             return True
 
-        return False
+        if (self.meat_valid and prev.meat_valid
+                and abs(self.meat_temp_f - prev.meat_temp_f) >= temp_thresh):  # type: ignore[operator]
+            return True
+
+        return (
+            abs(self.damper_pct - prev.damper_pct) >= output_thresh
+            or abs(self.blower_pct - prev.blower_pct) >= output_thresh
+        )
 
     def format_pit(self) -> str:
         """Format pit temperature string."""

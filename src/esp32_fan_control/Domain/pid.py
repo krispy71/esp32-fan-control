@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from esp32_fan_control.Domain.airflow import AirflowDemand
 
 

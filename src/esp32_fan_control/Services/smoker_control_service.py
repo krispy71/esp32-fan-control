@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import replace
+
 from esp32_fan_control.Domain.airflow import ActuatorCoordinator
 from esp32_fan_control.Domain.configuration import SmokerConfig
-from esp32_fan_control.Domain.control import ControlCommandKind, ControlState, PersistenceStatus
+from esp32_fan_control.Domain.control import (
+    ControlCommandKind,
+    ControlState,
+    PersistenceStatus,
+)
 from esp32_fan_control.Domain.lid_detector import LidDetectorConfig, LidOpenDetector
 from esp32_fan_control.Domain.pid import PIDConfig, PIDRegulator
 from esp32_fan_control.Domain.temperature import SensorRole
-from esp32_fan_control.Services.Ports.actuator_ports import BlowerActuatorPort, DamperActuatorPort
+from esp32_fan_control.Services.Ports.actuator_ports import (
+    BlowerActuatorPort,
+    DamperActuatorPort,
+)
 from esp32_fan_control.Services.Ports.config_storage_port import ConfigStoragePort
 from esp32_fan_control.Services.Ports.control_channel_port import ControlChannelPort
 from esp32_fan_control.Services.Ports.sensor_port import TemperatureSensorPort
-from esp32_fan_control.Services.Ports.telemetry_port import TelemetryPublisherPort, TelemetrySnapshot
+from esp32_fan_control.Services.Ports.telemetry_port import (
+    TelemetryPublisherPort,
+    TelemetrySnapshot,
+)
 
 
 class SmokerControlService:

@@ -52,9 +52,9 @@ class SmokerConfig:
         return DamperCalibration(self.servo_min_pulse_us, self.servo_max_pulse_us, self.servo_inverted)
 
     def __post_init__(self) -> None:
-        self.damper_calibration  # Validate at the configuration boundary.
+        _ = self.damper_calibration  # Validate at the configuration boundary.
         if not isinstance(self.meat_probe_mode, MeatProbeMode):
-            raise ValueError("Unknown meat probe mode")
+            raise TypeError("Unknown meat probe mode")
         if not isinstance(self.meater_cloud_token, str) or len(self.meater_cloud_token) > 95:
             raise ValueError("Cloud token exceeds the device capacity")
         if not isinstance(self.meater_mac_filter, str) or len(self.meater_mac_filter) > 17:

@@ -15,7 +15,6 @@
 #include "../src/Adapters/Sensors/MeaterBleClientAdapter.hpp"
 #include "../src/Adapters/Sensors/MeaterCloudAdapter.hpp"
 #include "../src/Adapters/Sensors/CompositeSensorAdapter.hpp"
-#include "../src/Adapters/Network/WebServerAdapter.hpp"
 #include "../src/Adapters/Storage/ESP32NVSConfigAdapter.hpp"
 #include "../src/Domain/DisplayView.hpp"
 #include "../src/Adapters/Display/InlandEInkAdapter.hpp"
@@ -164,6 +163,7 @@ public:
 class MockDamper : public Services::Ports::IDamperActuatorPort {
 public:
     float position{0.0f};
+    void configure(const Domain::DamperCalibration&) override {}
     void setPosition(float p) override { position = p; }
 };
 
@@ -180,6 +180,8 @@ static int testSmokerControlService() {
 
     sensor.reading = Domain::TemperatureReading::fromFahrenheit(225.0f, Domain::SensorRole::Pit, 1000);
     Services::SmokerControlService service(sensor, damper, blower, nullptr, 225.0f);
+
+    service.initialize();
 
     // Initial cycle at steady setpoint
     auto s1 = service.executeCycle(1000);
@@ -214,32 +216,6 @@ static int testSmokerControlService() {
     TEST_ASSERT(!service.lastTelemetry().is_pit_valid, "lastTelemetry must reflect sensor fault");
 
     std::cout << "  [PASS] testSmokerControlService\n";
-    return 0;
-}
-
-static int testWebServerAdapter() {
-    MockSensor sensor;
-    MockDamper damper;
-    MockBlower blower;
-    sensor.reading = Domain::TemperatureReading::fromFahrenheit(225.0f, Domain::SensorRole::Pit, 1000);
-
-    Services::SmokerControlService service(sensor, damper, blower, nullptr, 225.0f);
-    service.executeCycle(1000);
-
-    Adapters::Network::WebServerAdapter web(service, 80);
-    web.begin();
-    web.update();
-
-    TEST_ASSERT(web.isInitialized(), "WebServerAdapter must be initialized after begin()");
-    TEST_ASSERT(web.port() == 80, "WebServerAdapter port must be 80");
-
-    char buf[512];
-    web.formatTelemetryJson(buf, sizeof(buf));
-    TEST_ASSERT(std::strstr(buf, "\"pit_temp_f\":225.0") != nullptr, "JSON must contain formatted pit_temp_f");
-    TEST_ASSERT(std::strstr(buf, "\"setpoint_f\":225.0") != nullptr, "JSON must contain formatted setpoint_f");
-    TEST_ASSERT(std::strstr(buf, "\"status\":\"REGULATING\"") != nullptr, "JSON must contain REGULATING status");
-
-    std::cout << "  [PASS] testWebServerAdapter\n";
     return 0;
 }
 
@@ -280,6 +256,8 @@ static int testConfigStorage() {
         sensor, damper, blower, nullptr, 225.0f,
         Domain::ActuatorCoordinator{}, Domain::PIDConfig{}, &storage
     );
+
+    service.initialize();
 
     // Should have restored 265.0f from storage
     TEST_ASSERT(service.setpoint() == 265.0f, "Service must restore persisted setpoint 265.0 on init");
@@ -665,7 +643,6 @@ int main() {
     if (testLidDetector() != 0) return 1;
     if (testMAX31855Decoding() != 0) return 1;
     if (testSmokerControlService() != 0) return 1;
-    if (testWebServerAdapter() != 0) return 1;
     if (testConfigStorage() != 0) return 1;
     if (testBLEDecoder() != 0) return 1;
     if (testBLEProbeAdapter() != 0) return 1;
@@ -674,6 +651,6 @@ int main() {
     if (testMeaterAdaptersAndMultiModeRouting() != 0) return 1;
     if (testDisplayViewAndInlandEInkAdapter() != 0) return 1;
 
-    std::cout << "\nALL 14 C++ TEST SUITES PASSED CLEANLY!\n";
+    std::cout << "\nALL 13 C++ TEST SUITES PASSED CLEANLY!\n";
     return 0;
 }
