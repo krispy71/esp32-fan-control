@@ -10,6 +10,10 @@ trap 'rm -rf -- "$build_dir"' EXIT
 "${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -pthread \
     "$repo_root/firmware/test/test_wireless_concurrency.cpp" -o "$build_dir/wireless"
 "$build_dir/wireless"
+"${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -pthread -DARDUINO \
+    -I"$repo_root/firmware/test/arduino_spies" \
+    "$repo_root/firmware/test/test_ble_discovery.cpp" -o "$build_dir/discovery"
+"$build_dir/discovery"
 # Compile the production entrypoint unchanged apart from replacing its HTTPS
 # transport adapter include with a spy; all owned services/hardware remain real.
 python3 - "$repo_root" "$build_dir/startup_main.cpp" <<'PY'

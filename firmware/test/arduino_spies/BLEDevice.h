@@ -1,43 +1,71 @@
 #pragma once
 #include "Arduino.h"
 #include <functional>
+using esp_ble_addr_type_t=uint8_t;
 class BLEUUID { public: explicit BLEUUID(const char*) {} };
-class BLEAddress { public: std::string toString() const { return "01:23:45:67:89:AB"; } };
+class BLEAddress {
+    std::string value_;
+public:
+    explicit BLEAddress(std::string value="01:23:45:67:89:AB") : value_(std::move(value)) {}
+    std::string toString() const { return value_; }
+};
 class BLEAdvertisedDevice {
 public:
-    BLEAddress getAddress() { return {}; }
-    bool haveName() { return false; }
-    std::string getName() { return {}; }
-    bool haveServiceData() { return false; }
-    std::string getServiceData() { return {}; }
-    bool haveManufacturerData() { return false; }
-    std::string getManufacturerData() { return {}; }
+    std::string mac{"01:23:45:67:89:AB"}, name, service_data, manufacturer_data;
+    uint8_t address_type{0};
+    BLEAddress getAddress() { return BLEAddress(mac); }
+    uint8_t getAddressType() { return address_type; }
+    bool haveName() { return !name.empty(); }
+    std::string getName() { return name; }
+    bool haveServiceData() { return !service_data.empty(); }
+    std::string getServiceData() { return service_data; }
+    bool haveManufacturerData() { return !manufacturer_data.empty(); }
+    std::string getManufacturerData() { return manufacturer_data; }
 };
 class BLEAdvertisedDeviceCallbacks { public: virtual ~BLEAdvertisedDeviceCallbacks() = default; virtual void onResult(BLEAdvertisedDevice) {} };
 class BLEScanResults { public: int getCount() { return 0; } BLEAdvertisedDevice getDevice(int) { return {}; } };
 class BLEScan {
 public:
-    void setAdvertisedDeviceCallbacks(BLEAdvertisedDeviceCallbacks*) {}
+    BLEAdvertisedDeviceCallbacks* callback{};
+    bool duplicates=false, running=false;
+    unsigned blocking_scans=0;
+    std::map<std::string,BLEAdvertisedDevice> retained;
+    void setAdvertisedDeviceCallbacks(BLEAdvertisedDeviceCallbacks* value,bool want_duplicates=false) { callback=value; duplicates=want_duplicates; }
     void setActiveScan(bool) {}
     void setInterval(int) {}
     void setWindow(int) {}
-    BLEScanResults start(int, bool) { return {}; }
-    void start(int, void*, bool) {}
+    BLEScanResults start(int, bool) { ++blocking_scans; return {}; }
+    void start(int, void*, bool) { retained.clear(); running=true; }
+    void stop() { running=false; }
+    // Arduino BLEScan.cpp calls the callback, then retains unseen addresses if
+    // wantDuplicates is false. Filtering inside the callback does not alter this.
+    void advertise(BLEAdvertisedDevice device) {
+        if(!running || (!duplicates && retained.count(device.mac))) return;
+        if(callback) callback->onResult(device);
+        if(!duplicates) retained.emplace(device.mac,device);
+    }
 };
 class BLERemoteCharacteristic {
 public:
-    bool canRead() { return false; }
+    bool canRead() { return true; }
     bool canNotify() { return false; }
-    std::string readValue() { return {}; }
+    std::string readValue() { return std::string("\x38\x06",2); }
     void registerForNotify(std::function<void(BLERemoteCharacteristic*, uint8_t*, size_t, bool)>) {}
 };
-class BLERemoteService { public: BLERemoteCharacteristic* getCharacteristic(BLEUUID) { return nullptr; } };
+class BLERemoteService { public: BLERemoteCharacteristic* getCharacteristic(BLEUUID) { static BLERemoteCharacteristic characteristic; return &characteristic; } };
 class BLEClient {
 public:
-    bool connect(BLEAdvertisedDevice*) { return false; }
-    bool isConnected() { return false; }
-    void disconnect() {}
-    BLERemoteService* getService(BLEUUID) { return nullptr; }
+    bool connected=false, allow_connection=false;
+    std::string connected_mac;
+    uint8_t connected_address_type=0;
+    unsigned attempts=0;
+    bool connect(BLEAddress address,esp_ble_addr_type_t address_type) {
+        ++attempts; connected_mac=address.toString(); connected_address_type=address_type;
+        connected=allow_connection; return connected;
+    }
+    bool isConnected() { return connected; }
+    void disconnect() { connected=false; }
+    BLERemoteService* getService(BLEUUID) { static BLERemoteService service; return connected ? &service : nullptr; }
 };
 class BLEDevice {
 public:

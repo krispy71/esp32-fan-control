@@ -51,18 +51,6 @@ public:
         return has_received_packet_ && ((now_ms - last_packet_time_ms_) <= staleness_timeout_ms_);
     }
 
-    void begin() noexcept {
-#ifdef ARDUINO
-        BLEDevice::init("SmokerController");
-        BLEScan* pBLEScan = BLEDevice::getScan();
-        pBLEScan->setAdvertisedDeviceCallbacks(this);
-        pBLEScan->setActiveScan(false); // Passive scan uses less power & coexists with Wi-Fi
-        pBLEScan->setInterval(100);
-        pBLEScan->setWindow(99);
-        pBLEScan->start(0, nullptr, false); // Continuous background scan
-#endif
-    }
-
     void update(uint32_t now_ms) noexcept {
         (void)now_ms;
 #ifdef ARDUINO

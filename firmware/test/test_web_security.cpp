@@ -56,7 +56,8 @@ httpd_req_t request(const char* path,int method=HTTP_GET,std::string body="",boo
     if(authenticate) req.headers["Authorization"]=auth();
     if(!origin.empty()) req.headers["Origin"]=origin;
     req.headers["Content-Type"]="application/json";
-    assert(route.handler(&req)==ESP_OK);
+    assert(route.handler(&req)==ESP_FAIL); // IDF must close, never drain an unread body.
+    assert(req.response_headers["Connection"]=="close");
     return req;
 }
 struct ResponseJson {
@@ -101,7 +102,7 @@ int main() {
     LittleFS.files["/device-cert.pem"]="test certificate supplied to TLS boundary";
     LittleFS.files["/device-key.pem"]="test key supplied to TLS boundary";
     LittleFS.files["/index.html"]="dashboard";
-    assert(web.begin()); assert(tls_settings.port_secure==443 && tls_settings.httpd.max_open_sockets==2);
+    assert(web.begin()); assert(httpd_settings.server_port==443 && httpd_settings.max_open_sockets==2);
     for(const auto* path:{"/","/api/config","/api/telemetry","/device-key.pem"}) assert(request(path,HTTP_GET,"",false).status=="401 Unauthorized");
     assert(request("/api/setpoint",HTTP_POST,"{\"setpoint\":450,\"config_version\":0}",false).status=="401 Unauthorized");
     assert(request("/api/config",HTTP_GET,"",true,"https://attacker.example").status=="403 Forbidden");

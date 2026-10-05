@@ -55,7 +55,9 @@ public:
     void verifySafety(uint32_t now) { control.verifyPitSafety(now); }
     void initializeNetwork() {
         display.begin();
-        passiveBle.begin();
+#ifdef ARDUINO
+        scanner.begin(passiveBle, directBle);
+#endif
         directBle.begin();
         web.begin();
     }
@@ -84,8 +86,9 @@ private:
     Adapters::Sensors::MAX31855SensorAdapter wired{spi, 5, SMOKER_FOOD_CS};
 #endif
     Adapters::Display::InlandEInkAdapter display{spi, 4, 22, 16, 17};
+    Adapters::Sensors::SharedBleScanner scanner;
     Adapters::Sensors::BLEProbeAdapter passiveBle;
-    Adapters::Sensors::MeaterBleClientAdapter directBle;
+    Adapters::Sensors::MeaterBleClientAdapter directBle{30000, &scanner};
     Adapters::Sensors::MeaterCloudAdapter cloud;
     Adapters::Sensors::CompositeSensorAdapter sensors{wired, &passiveBle, &directBle, &cloud};
     Adapters::Telemetry::SerialTelemetryAdapter telemetry;

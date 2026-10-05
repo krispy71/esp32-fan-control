@@ -11,7 +11,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <LittleFS.h>
-#include <esp_https_server.h>
+#include "BoundedHttpsTransport.hpp"
 #include <cJSON.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
@@ -33,29 +33,18 @@ public:
             Serial.println("[Web] HTTPS disabled: valid device access provisioning is required.");
             return false;
         }
-        httpd_ssl_config_t settings = HTTPD_SSL_CONFIG_DEFAULT();
-        settings.httpd.core_id = 0;
-        settings.httpd.task_priority = 1;
-        settings.httpd.max_open_sockets = 2;
-        settings.httpd.max_uri_handlers = 2;
-        settings.httpd.recv_wait_timeout = 3;
-        settings.httpd.send_wait_timeout = 3;
-        settings.httpd.uri_match_fn = httpd_uri_match_wildcard;
-        settings.port_secure = port_;
-        settings.cacert_pem = reinterpret_cast<const uint8_t*>(certificate_.c_str());
-        settings.cacert_len = certificate_.length() + 1;
-        settings.prvtkey_pem = reinterpret_cast<const uint8_t*>(private_key_.c_str());
-        settings.prvtkey_len = private_key_.length() + 1;
-        if (httpd_ssl_start(&server_, &settings) != ESP_OK) {
+        if (!transport_.start(certificate_.c_str(), certificate_.length() + 1,
+                              private_key_.c_str(), private_key_.length() + 1, port_)) {
             WiFi.softAPdisconnect(true);
             Serial.println("[Web] HTTPS disabled: TLS startup failed.");
             return false;
         }
+        server_ = transport_.server();
         httpd_uri_t get{};
         get.uri = "/*"; get.method = HTTP_GET; get.handler = dispatch; get.user_ctx = this;
         httpd_uri_t post = get; post.method = HTTP_POST;
         if (httpd_register_uri_handler(server_, &get) != ESP_OK || httpd_register_uri_handler(server_, &post) != ESP_OK) {
-            httpd_ssl_stop(server_); server_ = nullptr;
+            transport_.stop(); server_ = nullptr;
             WiFi.softAPdisconnect(true);
             return false;
         }
@@ -92,6 +81,7 @@ private:
     };
     httpd_handle_t server_{nullptr};
     String certificate_, private_key_;
+    BoundedHttpsTransport transport_;
     char password_hash_[65]{};
     char hosts_[8][65]{};
     size_t host_count_{0};
@@ -438,7 +428,11 @@ private:
         return httpd_resp_send_chunk(req, nullptr, 0);
     }
     static esp_err_t dispatch(httpd_req_t* req) {
-        return static_cast<WebServerAdapter*>(req->user_ctx)->handle(req);
+        httpd_resp_set_hdr(req, "Connection", "close");
+        static_cast<WebServerAdapter*>(req->user_ctx)->handle(req);
+        // IDF drains unread Content-Length after ESP_OK, including rejected
+        // requests. Returning failure closes the session without that drain.
+        return ESP_FAIL;
     }
 #endif
 };

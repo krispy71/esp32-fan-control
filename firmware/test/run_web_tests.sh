@@ -8,7 +8,11 @@ if [[ ! -f "$cjson_include/cJSON.h" ]]; then
   echo 'Missing cJSON headers; install the PlatformIO Arduino framework or set CJSON_INCLUDE_DIR.' >&2
   exit 1
 fi
-c++ -std=c++17 -Wall -Wextra -Werror -DARDUINO \
+c++ -std=c++17 -Wall -Wextra -Werror -pthread -DARDUINO \
   -I "$repo_root/firmware/test/web_spies" -I "$repo_root/firmware/src" -I "$cjson_include" \
   "$repo_root/firmware/test/test_web_security.cpp" -l:libcjson.so.1 -l:libmbedcrypto.so.7 -o "$web_scratch/test_web"
 "$web_scratch/test_web"
+c++ -std=c++17 -Wall -Wextra -Werror -pthread -DARDUINO \
+  -I "$repo_root/firmware/test/web_spies" \
+  "$repo_root/firmware/test/test_https_transport.cpp" -o "$web_scratch/test_transport"
+"$web_scratch/test_transport"
