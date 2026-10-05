@@ -14,9 +14,9 @@ class SerialTelemetryAdapter : public Services::Ports::ITelemetryPublisherPort {
 public:
     void publish(const Services::Ports::TelemetrySnapshot& s) noexcept override {
 #ifdef ARDUINO
-        char meat_str[48];
+        char meat_str[96];
         if (s.is_meat_wireless && s.is_meat_valid) {
-            snprintf(meat_str, sizeof(meat_str), "%.1f F [%s %d%%]", s.meat_temp_f, s.meat_probe_name ? s.meat_probe_name : "BLE", static_cast<int>(s.meat_battery_pct));
+            snprintf(meat_str, sizeof(meat_str), "%.1f F [%.31s %d%%]", s.meat_temp_f, s.meat_probe_name[0] ? s.meat_probe_name : "BLE", static_cast<int>(s.meat_battery_pct));
         } else if (s.is_meat_valid) {
             snprintf(meat_str, sizeof(meat_str), "%.1f F [Wired]", s.meat_temp_f);
         } else {

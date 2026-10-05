@@ -4,6 +4,8 @@
 #include "../../Domain/BLEDecoder.hpp"
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include "../Runtime/SnapshotMutex.hpp"
 #include <cstdio>
 
 #ifdef ARDUINO
@@ -24,8 +26,8 @@ namespace SmokerController::Adapters::Sensors {
  */
 class MeaterCloudAdapter : public Services::Ports::ITemperatureSensorPort {
 public:
-    explicit MeaterCloudAdapter(uint32_t staleness_timeout_ms = 60000, uint32_t poll_interval_ms = 20000) noexcept
-        : staleness_timeout_ms_(staleness_timeout_ms),
+    explicit MeaterCloudAdapter(uint32_t staleness_timeout_ms = 60000, uint32_t poll_interval_ms = 20000, const char* root_ca = nullptr) noexcept
+        : root_ca_(root_ca), staleness_timeout_ms_(staleness_timeout_ms),
           poll_interval_ms_(poll_interval_ms),
           last_fetch_time_ms_(0),
           last_poll_attempt_ms_(0),
@@ -37,6 +39,7 @@ public:
     }
 
     void setApiToken(const char* token) noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         if (token) {
             std::strncpy(api_token_, token, sizeof(api_token_) - 1);
             api_token_[sizeof(api_token_) - 1] = '\0';
@@ -45,7 +48,6 @@ public:
         }
     }
 
-    [[nodiscard]] const char* apiToken() const noexcept { return api_token_; }
 
     void setEnabled(bool enabled) noexcept {
         is_enabled_ = enabled;
@@ -54,13 +56,14 @@ public:
     [[nodiscard]] bool isEnabled() const noexcept { return is_enabled_; }
 
     [[nodiscard]] bool isConnected(uint32_t now_ms) const noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         return has_received_data_ && ((now_ms - last_fetch_time_ms_) <= staleness_timeout_ms_);
     }
 
     void update(uint32_t now_ms) noexcept {
         (void)now_ms;
 #ifdef ARDUINO
-        if (!is_enabled_ || api_token_[0] == '\0') return;
+        if (!is_enabled_ || !root_ca_) return;
         if (WiFi.status() != WL_CONNECTED) return;
 
         // Poll at configured interval (respecting MEATER rate limits)
@@ -75,6 +78,7 @@ public:
         if (!json_str) return false;
         Domain::BLEProbeReading r{};
         if (Domain::BLEAdvertisementDecoder::decodeMeaterCloudJson(json_str, r)) {
+            Runtime::SnapshotLock lock(mutex_);
             last_reading_ = r;
             last_fetch_time_ms_ = now_ms;
             has_received_data_ = true;
@@ -84,10 +88,12 @@ public:
     }
 
     void setMockTime(uint32_t now_ms) noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         mock_time_ms_ = now_ms;
     }
 
     Domain::TemperatureReading readTemperature(Domain::SensorRole role) noexcept override {
+        Runtime::SnapshotLock lock(mutex_);
         uint32_t now = 0;
 #ifdef ARDUINO
         now = millis();
@@ -95,7 +101,7 @@ public:
         now = (mock_time_ms_ > 0) ? mock_time_ms_ : last_fetch_time_ms_;
 #endif
 
-        if (!isConnected(now)) {
+        if (!(has_received_data_ && ((now - last_fetch_time_ms_) <= staleness_timeout_ms_))) {
             Domain::TemperatureReading r{
                 0.0f,
                 role,
@@ -146,13 +152,16 @@ public:
 #ifdef ARDUINO
 private:
     void fetchFromCloud(uint32_t now_ms) {
+        char token[sizeof(api_token_)];
+        { Runtime::SnapshotLock lock(mutex_); std::memcpy(token, api_token_, sizeof(token)); }
+        if (token[0] == '\0' || !root_ca_) return;
         WiFiClientSecure client;
-        client.setInsecure(); // Skip certificate bundle check to save flash/RAM
+        client.setCACert(root_ca_);
 
         HTTPClient http;
         if (http.begin(client, "https://public-api.cloud.meater.com/v1/devices")) {
             char auth_header[128];
-            snprintf(auth_header, sizeof(auth_header), "Bearer %s", api_token_);
+            snprintf(auth_header, sizeof(auth_header), "Bearer %s", token);
             http.addHeader("Authorization", auth_header);
             http.setTimeout(5000);
 
@@ -167,6 +176,8 @@ private:
 #endif
 
 private:
+    const char* root_ca_; // Provisioned trust anchor; absent means cloud disabled.
+    mutable Runtime::SnapshotMutex mutex_;
     uint32_t staleness_timeout_ms_;
     uint32_t poll_interval_ms_;
     uint32_t last_fetch_time_ms_;

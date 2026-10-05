@@ -7,13 +7,20 @@
 (function () {
   'use strict';
 
+  const themeToggle = document.getElementById('theme-toggle');
+  function setTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    themeToggle.textContent = theme === 'light' ? 'Dark theme' : 'Light theme';
+  }
+  setTheme(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  themeToggle.addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
+
   // --- Configuration & State ---
   const MAX_HISTORY_POINTS = 300; // 5 minutes at 1Hz
   const telemetryHistory = [];
   let isLidPaused = false;
   let connectionState = 'connecting'; // 'connected' | 'connecting' | 'disconnected'
   let pollingInterval = null;
-  let eventSource = null;
 
   // --- DOM Elements ---
   const elConnectionBadge = document.getElementById('connection-badge');
@@ -50,7 +57,7 @@
   }
 
   function formatUptime(secondsOrMs) {
-    const totalSec = secondsOrMs > 100000 ? Math.floor(secondsOrMs / 1000) : Math.floor(secondsOrMs);
+    const totalSec = Math.floor(secondsOrMs / 1000);
     const hrs = Math.floor(totalSec / 3600);
     const mins = Math.floor((totalSec % 3600) / 60);
     const secs = totalSec % 60;
@@ -390,211 +397,134 @@
     ctx.restore();
   }
 
-  // --- Transport Communication: SSE, WS, & Fallback Polling ---
-  function startStreaming() {
-    // 1. Try Server-Sent Events (SSE) first
-    if (window.EventSource) {
-      try {
-        eventSource = new EventSource('/api/events');
-        eventSource.onmessage = function (event) {
-          try {
-            const data = JSON.parse(event.data);
-            handleTelemetry(data);
-          } catch (e) {
-            console.error('Failed to parse SSE JSON:', e);
-          }
-        };
+  // The browser owns HTTPS Basic credentials; application JavaScript never stores them.
+  let latestConfigVersion = 0;
+  let formConfigVersion = 0;
+  let telemetryPending = false;
 
-        eventSource.onerror = function () {
-          setConnectionStatus('connecting');
-          // If SSE disconnects or server does not support it, trigger polling
-          startPolling();
-        };
-
-        eventSource.onopen = function () {
-          setConnectionStatus('connected');
-          stopPolling();
-        };
-        return;
-      } catch (e) {
-        console.warn('SSE creation failed, falling back to HTTP polling:', e);
-      }
-    }
-
-    // 2. Fallback to 1Hz HTTP Polling
-    startPolling();
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000), ...options
+    });
+    const value = await response.json();
+    if (response.status === 401) throw new Error('Authentication required. Reload the page to sign in.');
+    if (!response.ok) throw new Error(value.error || 'Unable to complete the request. Try again.');
+    return value;
   }
 
-  function fetchTelemetryOnce() {
-    fetch('/api/telemetry')
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        handleTelemetry(data);
-      })
-      .catch((err) => {
-        setConnectionStatus('disconnected');
-        console.warn('Telemetry polling error:', err);
+  async function command(path, values, message, form) {
+    const buttons = Array.from(form.querySelectorAll('button'));
+    buttons.forEach((button) => { button.disabled = true; });
+    message.textContent = 'Sending…';
+    try {
+      const queued = await api(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values)
       });
-  }
-
-  function startPolling() {
-    if (!pollingInterval) {
-      fetchTelemetryOnce();
-      pollingInterval = setInterval(fetchTelemetryOnce, 1000);
+      message.textContent = 'Queued. Waiting for the controller…';
+      for (let attempt = 0; attempt < 30; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const result = await api(`/api/command?id=${queued.request_id}`);
+        if (result.status === 'queued') continue;
+        latestConfigVersion = result.config_version;
+        if (result.status !== 'applied') throw new Error(result.persistence === 'failed' ?
+          'Settings were not applied because storage could not reserve a revision. Restore storage and retry, or restart the controller.' :
+          'Configuration changed. Reload settings and try again.');
+        if (path === '/api/config') formConfigVersion = result.config_version;
+        if (path !== '/api/lid-pause' && result.persistence === 'failed') {
+          throw new Error('Applied, but could not save. Changes will be lost after restart. Try saving again.');
+        }
+        message.textContent = path === '/api/lid-pause' ? 'Airflow control updated.' :
+          result.persistence === 'saved' ? 'Applied and saved.' :
+          result.persistence === 'unchanged' ? 'Settings unchanged.' : 'Applied for this session; storage is unavailable.';
+        if (path === '/api/config') await fetchConfig();
+        await fetchTelemetryOnce();
+        return;
+      }
+      throw new Error('No confirmation received. Check the current settings before retrying.');
+    } catch (error) {
+      message.textContent = error.name === 'TimeoutError' || error.name === 'TypeError' ? 'Unable to connect. Check the connection and try again.' : error.message;
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
     }
   }
 
-  function stopPolling() {
-    if (pollingInterval) {
-      clearInterval(pollingInterval);
-      pollingInterval = null;
+  async function fetchTelemetryOnce() {
+    if (telemetryPending) return;
+    telemetryPending = true;
+    try {
+      const data = await api('/api/telemetry');
+      latestConfigVersion = data.config_version;
+      handleTelemetry(data);
+    } catch (error) {
+      setConnectionStatus('disconnected');
+    } finally {
+      telemetryPending = false;
     }
   }
 
-  // --- User Control Actions ---
-  window.syncSliderToInput = function (val) {
-    if (elSetpointInput) elSetpointInput.value = val;
-  };
+  function startStreaming() {
+    fetchTelemetryOnce();
+    pollingInterval = setInterval(fetchTelemetryOnce, 1000);
+  }
 
-  window.syncInputToSlider = function (val) {
-    if (elSetpointSlider) elSetpointSlider.value = val;
-  };
-
+  window.syncSliderToInput = function (val) { if (elSetpointInput) elSetpointInput.value = val; };
+  window.syncInputToSlider = function (val) { if (elSetpointSlider) elSetpointSlider.value = val; };
   window.setPreset = function (temp) {
-    if (elSetpointSlider) elSetpointSlider.value = temp;
-    if (elSetpointInput) elSetpointInput.value = temp;
+    elSetpointSlider.value = temp;
+    elSetpointInput.value = temp;
     window.submitSetpoint();
   };
-
   window.submitSetpoint = function () {
-    const val = parseFloat(elSetpointInput ? elSetpointInput.value : elSetpointSlider.value);
-    if (isNaN(val) || val < 100 || val > 450) {
-      alert('Target temperature must be between 100°F and 450°F.');
-      return;
-    }
-
-    fetch('/api/setpoint', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ setpoint: val })
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json().catch(() => ({}));
-      })
-      .then(() => {
-        if (elCurrentSetpoint) elCurrentSetpoint.innerHTML = `${formatF(val)}&deg;F`;
-      })
-      .catch((err) => {
-        console.error('Failed to submit setpoint:', err);
-        alert('Could not update setpoint: ' + err.message);
-      });
+    const form = document.getElementById('setpoint-form');
+    if (!form.reportValidity()) return;
+    command('/api/setpoint', { setpoint: Number(elSetpointInput.value), config_version: latestConfigVersion },
+      document.getElementById('control-msg'), form);
   };
-
   window.toggleLidPause = function () {
-    fetch('/api/lid-pause', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: isLidPaused ? 'resume' : 'pause' })
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json().catch(() => ({}));
-      })
-      .then(() => {
-        fetchTelemetryOnce();
-      })
-      .catch((err) => {
-        console.error('Failed to toggle lid pause:', err);
-      });
+    command('/api/lid-pause', { action: isLidPaused ? 'resume' : 'pause', config_version: latestConfigVersion },
+      document.getElementById('control-msg'), document.getElementById('setpoint-form'));
+  };
+  window.onMeatModeChange = function (value) {
+    document.getElementById('meater-cloud-group').style.display = Number(value) === 3 ? 'block' : 'none';
+    document.getElementById('meater-mac-group').style.display = Number(value) === 2 ? 'block' : 'none';
   };
 
-  window.onMeatModeChange = function (val) {
-    const mode = parseInt(val, 10);
-    const elCloud = document.getElementById('meater-cloud-group');
-    const elMac = document.getElementById('meater-mac-group');
-    if (elCloud) elCloud.style.display = (mode === 3) ? 'block' : 'none';
-    if (elMac) elMac.style.display = (mode === 2) ? 'block' : 'none';
-  };
-
-  function fetchConfig() {
-    fetch('/api/config')
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((cfg) => {
-        const elKp = document.getElementById('cfg-kp');
-        const elKi = document.getElementById('cfg-ki');
-        const elKd = document.getElementById('cfg-kd');
-        const elThresh = document.getElementById('cfg-threshold');
-        const elMeatMode = document.getElementById('cfg-meat-mode');
-        const elMeaterToken = document.getElementById('cfg-meater-token');
-        const elMeaterMac = document.getElementById('cfg-meater-mac');
-
-        if (elKp && cfg.pid_kp !== undefined) elKp.value = cfg.pid_kp;
-        if (elKi && cfg.pid_ki !== undefined) elKi.value = cfg.pid_ki;
-        if (elKd && cfg.pid_kd !== undefined) elKd.value = cfg.pid_kd;
-        if (elThresh && cfg.airflow_threshold_pct !== undefined) elThresh.value = cfg.airflow_threshold_pct;
-        if (elMeatMode && cfg.meat_probe_mode !== undefined) {
-          elMeatMode.value = cfg.meat_probe_mode;
-          window.onMeatModeChange(cfg.meat_probe_mode);
-        }
-        if (elMeaterToken && cfg.meater_cloud_token !== undefined) elMeaterToken.value = cfg.meater_cloud_token;
-        if (elMeaterMac && cfg.meater_mac_filter !== undefined) elMeaterMac.value = cfg.meater_mac_filter;
-      })
-      .catch((err) => {
-        console.warn('Could not load config:', err);
-      });
+  async function fetchConfig() {
+    try {
+      const cfg = await api('/api/config');
+      latestConfigVersion = formConfigVersion = cfg.config_version;
+      const fields = { 'cfg-kp': 'pid_kp', 'cfg-ki': 'pid_ki', 'cfg-kd': 'pid_kd',
+        'cfg-threshold': 'airflow_threshold_pct', 'cfg-meat-mode': 'meat_probe_mode',
+        'cfg-meater-mac': 'meater_mac_filter', 'cfg-servo-min': 'servo_min_pulse_us',
+        'cfg-servo-max': 'servo_max_pulse_us' };
+      for (const [id, field] of Object.entries(fields)) document.getElementById(id).value = cfg[field];
+      document.getElementById('cfg-servo-inverted').checked = cfg.servo_inverted;
+      document.getElementById('cfg-meater-token').value = '';
+      document.getElementById('cfg-clear-token').checked = false;
+      document.getElementById('token-status').textContent = cfg.meater_cloud_token_configured ?
+        'A token is configured. Leave blank to keep it.' : 'No token configured.';
+      document.getElementById('storage-status-badge').textContent = cfg.persistence === 'failed' ?
+        'Save failed' : cfg.persistence === 'not_configured' ? 'Session only' : 'Storage ready';
+      window.onMeatModeChange(cfg.meat_probe_mode);
+    } catch (error) {
+      document.getElementById('save-msg').textContent = 'Unable to load settings. Reload to retry.';
+    }
   }
 
   window.submitTuningConfig = function () {
-    const elKp = document.getElementById('cfg-kp');
-    const elKi = document.getElementById('cfg-ki');
-    const elKd = document.getElementById('cfg-kd');
-    const elThresh = document.getElementById('cfg-threshold');
-    const elMeatMode = document.getElementById('cfg-meat-mode');
-    const elMeaterToken = document.getElementById('cfg-meater-token');
-    const elMeaterMac = document.getElementById('cfg-meater-mac');
-    const msg = document.getElementById('save-msg');
-
-    const kp = parseFloat(elKp ? elKp.value : 3.0);
-    const ki = parseFloat(elKi ? elKi.value : 0.02);
-    const kd = parseFloat(elKd ? elKd.value : 15.0);
-    const thresh = parseFloat(elThresh ? elThresh.value : 40.0);
-    const meatMode = parseInt(elMeatMode ? elMeatMode.value : '1', 10);
-    const meaterToken = elMeaterToken ? elMeaterToken.value.trim() : '';
-    const meaterMac = elMeaterMac ? elMeaterMac.value.trim() : '';
-
-    fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pid_kp: kp,
-        pid_ki: ki,
-        pid_kd: kd,
-        airflow_threshold_pct: thresh,
-        meat_probe_mode: meatMode,
-        meater_cloud_token: meaterToken,
-        meater_mac_filter: meaterMac
-      })
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(() => {
-        if (msg) {
-          msg.textContent = 'Saved to NVS flash!';
-          setTimeout(() => { msg.textContent = ''; }, 3000);
-        }
-      })
-      .catch((err) => {
-        alert('Failed to save config: ' + err.message);
-      });
+    const form = document.getElementById('tuning-form');
+    if (!form.reportValidity()) return;
+    const get = (id) => document.getElementById(id);
+    const values = {
+      pid_kp: Number(get('cfg-kp').value), pid_ki: Number(get('cfg-ki').value),
+      pid_kd: Number(get('cfg-kd').value), airflow_threshold_pct: Number(get('cfg-threshold').value),
+      meat_probe_mode: Number(get('cfg-meat-mode').value), meater_mac_filter: get('cfg-meater-mac').value.trim(),
+      servo_min_pulse_us: Number(get('cfg-servo-min').value), servo_max_pulse_us: Number(get('cfg-servo-max').value),
+      servo_inverted: get('cfg-servo-inverted').checked, config_version: formConfigVersion
+    };
+    if (get('cfg-clear-token').checked) values.meater_cloud_token = '';
+    else if (get('cfg-meater-token').value) values.meater_cloud_token = get('cfg-meater-token').value;
+    command('/api/config', values, get('save-msg'), form);
   };
 
   // Resize listener for Canvas responsiveness

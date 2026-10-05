@@ -35,12 +35,16 @@ dashboard as an exception to the prescribed Next.js stack on October 4.
 Domain: reuse PID, Temperature, SmokerConfig, and DisplayView; add validated damper
 calibration and owned telemetry/control messages. Domain must not import Services.
 Services: reuse SmokerControlService; explicit initialization, suppression recovery,
-calibration application, and command consumption/publication at the control boundary.
+calibration application, and command consumption/publication at the control boundary. A service-owned fast
+pit-health check inhibits outputs between PID cycles; healthy checks never advance PID.
 Ports: reuse sensor/storage/actuator ports; add the related damper calibration operation
 and a bounded control-command/state exchange port. No vendor types cross it.
 Repositories: none; existing configuration storage port remains sufficient.
 Adapters: isolated SPI owner; corrected actuators, MAX converters, NVS, bounded control
 exchange; authenticated web boundary with structured parsing and redacted outputs.
+The pinned Arduino BLE discovery implementation receives a build-local ownership
+repair, checked against the vendor source checksum and executable allocation tests.
+No shared SDK files are modified; the application spine remains unchanged.
 Controller: construct application ownership after Arduino initialization; wire ports and
 schedule control/network tasks, without mutable namespace-level service dependencies.
 Client UI: authenticated requests and calibration form in the existing embedded assets.
@@ -114,4 +118,8 @@ Evidence: exact commands/results and acceptance matrix in the completion report.
 
 ## Status
 
-Planning complete. Implementation and verification in progress.
+Software implementation complete. Independent integration review: PASS, no remaining
+findings. All executable software acceptance scenarios pass, including both ESP32
+builds and the real simulator/browser flow. Physical Gates 1–5 remain bench work;
+full-project verification is PARTIALLY VERIFIED. See the
+[completion and verification report](../review-verification.md).

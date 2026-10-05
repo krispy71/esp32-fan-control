@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections import deque
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,10 @@ class LidOpenDetector:
             return 0.0
         # Will be evaluated against current time in update()
         return 0.0
+
+    def configure(self, config: LidDetectorConfig) -> None:
+        """Update settings while retaining an active safety pause."""
+        self._config = config
 
     def reset(self) -> None:
         """Manually clear lid-open suppression and history."""

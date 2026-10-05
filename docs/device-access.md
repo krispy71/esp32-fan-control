@@ -17,21 +17,23 @@ The command creates a private directory with files readable only by their owner:
 
 - `device-access.json`: device SSID, Wi-Fi password, administrator password verifier,
   and allowed hostnames.
-- `device-cert.pem`: the device's self-signed TLS certificate.
+- `device-cert.pem`: the device server certificate, signed by its private device CA.
+- `device-ca.pem`: the public CA certificate to trust on your clients.
+- `operator-ca-key.pem`: the CA signing key; keep it off the device.
 - `device-key.pem`: its private key.
 - `operator-access.txt`: the operator's Wi-Fi and HTTPS credentials.
 
 The provisioning command refuses to overwrite an existing directory and does not
-print credentials. Keep `operator-access.txt` outside the repository and device flash.
-The other three files are also ignored by Git; do not force-add any access files.
+print credentials. Keep `operator-access.txt` and `operator-ca-key.pem` outside the repository and device flash.
+All generated access files are ignored by Git; do not force-add any access files.
 
 Default certificate names cover `192.168.4.1`, `localhost`, and `127.0.0.1`. Use repeated
-`--host` options when provisioning if different names are needed. Import the generated
-certificate into the trust store of each client you control before using the dashboard.
+`--host` options when provisioning if different names are needed. Import `device-ca.pem`
+into the trust store of each client you control before using the dashboard.
 Check its fingerprint locally with:
 
 ```bash
-openssl x509 -in "$HOME/.local/share/esp32-smoker/device-a/device-cert.pem" -noout -fingerprint -sha256
+openssl x509 -in "$HOME/.local/share/esp32-smoker/device-a/device-ca.pem" -noout -fingerprint -sha256
 ```
 
 ## Install on the ESP32
@@ -52,7 +54,7 @@ listed in the private operator file and visit `https://192.168.4.1`. The browser
 for the administrator credentials. No credentials belong in URLs.
 
 To rotate access, provision a new directory, replace all three device files together,
-upload the new filesystem image, and trust the replacement certificate. Retain the
+upload the new filesystem image, and trust the replacement CA certificate. Retain the
 old private directory until the replacement is verified. Existing browser credentials
 may need to be cleared before signing in again.
 
@@ -73,7 +75,11 @@ operator file. The simulator defaults to a local loopback address.
 Control requests are authenticated and validated before entering the bounded control
 queue. Acceptance into that queue is distinct from application by the control loop;
 the API exposes the applied command and persistence result. Stale configuration
-versions are rejected rather than silently overwriting a newer change.
+versions are rejected rather than silently overwriting a newer change, including after
+a reboot. The controller reserves revision numbers in storage at startup. If that
+reservation fails, configuration edits are rejected and reported as a storage error;
+autonomous control continues. An ordinary settings-save failure is still reported
+as applied but not saved.
 
 MEATER tokens are write-only. Reading configuration reports whether a token is
 configured, never its value. Leaving the token field unchanged preserves it. The
@@ -83,3 +89,9 @@ The backend owns validation and applies calibration through the actuator port.
 
 Hardware accuracy, mechanical closure, and physical fault shutdown still require the
 bench procedure in [firmware/README.md](../firmware/README.md).
+
+The shipped composition does not configure a cloud trust anchor or a station network.
+MEATER cloud polling therefore stays disabled until an integrator supplies a trusted
+CA certificate and internet connectivity; it never bypasses certificate validation.
+Saving a cloud token alone does not enable cloud connectivity. Wired pit control and
+local BLE acquisition remain independent of that optional integration.

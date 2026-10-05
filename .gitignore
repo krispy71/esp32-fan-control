@@ -28,4 +28,6 @@ __pycache__/
 **/device-access.json
 **/device-key.pem
 **/device-cert.pem
+**/device-ca.pem
+**/operator-ca-key.pem
 **/operator-access.txt

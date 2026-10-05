@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from esp32_fan_control.Domain.airflow import AirflowDemand
 
 
@@ -64,6 +65,11 @@ class PIDRegulator:
         self._last_time_s = None
         self._filtered_derivative = 0.0
 
+    def suspend(self) -> None:
+        """Keep accumulated bias, excluding inhibited time and derivative changes."""
+        self._last_time_s = None
+        self._filtered_derivative = 0.0
+
     def compute(self, current_temp: float, current_time_s: float) -> AirflowDemand:
         """Calculate airflow demand from temperature error."""
         error = self._setpoint - current_temp
@@ -73,7 +79,7 @@ class PIDRegulator:
             self._last_time_s = current_time_s
             self._last_error = error
             p_term = self._config.kp * error
-            output = max(self._config.output_min, min(self._config.output_max, p_term))
+            output = max(self._config.output_min, min(self._config.output_max, p_term + self._config.ki * self._integral))
             return AirflowDemand(value_pct=round(output, 2))
 
         dt = current_time_s - self._last_time_s
@@ -84,13 +90,11 @@ class PIDRegulator:
         p_term = self._config.kp * error
 
         # 2. Integral Term with Anti-Windup Clamping
-        self._integral += error * dt
-        # Clamp integral accumulator
-        self._integral = max(
+        candidate_integral = max(
             self._config.integral_min,
-            min(self._config.integral_max, self._integral),
+            min(self._config.integral_max, self._integral + error * dt),
         )
-        i_term = self._config.ki * self._integral
+        i_term = self._config.ki * candidate_integral
 
         # 3. Derivative Term with Low-Pass Filtering
         raw_derivative = (error - self._last_error) / dt
@@ -100,6 +104,9 @@ class PIDRegulator:
 
         # 4. Total Output with Saturation Clamping
         total = p_term + i_term + d_term
+        if not ((total > self._config.output_max and error > 0.0)
+                or (total < self._config.output_min and error < 0.0)):
+            self._integral = candidate_integral
         clamped = max(self._config.output_min, min(self._config.output_max, total))
 
         # Update historical state

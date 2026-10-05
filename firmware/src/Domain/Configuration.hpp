@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 
 namespace SmokerController::Domain {
 
@@ -9,6 +10,16 @@ enum class MeatProbeMode : uint8_t {
     PassiveBle = 1,
     MeaterBleDirect = 2,
     MeaterCloud = 3
+};
+
+struct DamperCalibration {
+    uint16_t min_pulse_us{1000};
+    uint16_t max_pulse_us{2000};
+    bool inverted{false};
+
+    [[nodiscard]] bool isValid() const noexcept {
+        return min_pulse_us >= 500 && max_pulse_us <= 2500 && min_pulse_us < max_pulse_us;
+    }
 };
 
 struct SmokerConfig {
@@ -23,6 +34,17 @@ struct SmokerConfig {
     char meater_cloud_token[96]{""};
     char meater_mac_filter[18]{""};
 
+    uint16_t servo_min_pulse_us{1000};
+    uint16_t servo_max_pulse_us{2000};
+    bool servo_inverted{false};
+
+    // Exclusive durable high-water mark for configuration concurrency revisions.
+    uint32_t next_config_version{0};
+
+    [[nodiscard]] DamperCalibration damperCalibration() const noexcept {
+        return {servo_min_pulse_us, servo_max_pulse_us, servo_inverted};
+    }
+
     [[nodiscard]] bool isValid() const noexcept {
         return (setpoint_f >= 100.0f && setpoint_f <= 450.0f) &&
                (pid_kp >= 0.0f && pid_kp <= 100.0f) &&
@@ -31,7 +53,10 @@ struct SmokerConfig {
                (airflow_threshold_pct >= 10.0f && airflow_threshold_pct <= 90.0f) &&
                (lid_drop_threshold_deg >= 5.0f && lid_drop_threshold_deg <= 50.0f) &&
                (lid_pause_duration_ms >= 10000 && lid_pause_duration_ms <= 600000) &&
-               (static_cast<uint8_t>(meat_probe_mode) <= 3);
+               (static_cast<uint8_t>(meat_probe_mode) <= 3) &&
+               damperCalibration().isValid() &&
+               std::memchr(meater_cloud_token, '\0', sizeof(meater_cloud_token)) != nullptr &&
+               std::memchr(meater_mac_filter, '\0', sizeof(meater_mac_filter)) != nullptr;
     }
 };
 

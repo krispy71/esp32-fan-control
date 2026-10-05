@@ -14,6 +14,19 @@ class MeatProbeMode(str, Enum):
 
 
 @dataclass(frozen=True)
+class DamperCalibration:
+    min_pulse_us: int = 1000
+    max_pulse_us: int = 2000
+    inverted: bool = False
+
+    def __post_init__(self) -> None:
+        if (type(self.min_pulse_us) is not int or type(self.max_pulse_us) is not int
+                or not 500 <= self.min_pulse_us < self.max_pulse_us <= 2500
+                or type(self.inverted) is not bool):
+            raise ValueError("Calibration requires integer 500..2500 us endpoints, min < max, and boolean inversion")
+
+
+@dataclass(frozen=True)
 class SmokerConfig:
     """
     Configurable parameters for smoker regulation and safety.
@@ -30,14 +43,34 @@ class SmokerConfig:
     meater_cloud_token: str = ""
     meater_mac_filter: str = ""
 
+    servo_min_pulse_us: int = 1000
+    servo_max_pulse_us: int = 2000
+    servo_inverted: bool = False
+
+    # Exclusive durable high-water mark, never accepted from web configuration.
+    next_config_version: int = 0
+
+    @property
+    def damper_calibration(self) -> DamperCalibration:
+        return DamperCalibration(self.servo_min_pulse_us, self.servo_max_pulse_us, self.servo_inverted)
+
     def __post_init__(self) -> None:
+        if type(self.next_config_version) is not int or not 0 <= self.next_config_version <= 0xFFFFFFFF:
+            raise ValueError("Configuration revision reservation is outside uint32 capacity")
+        _ = self.damper_calibration  # Validate at the configuration boundary.
+        if not isinstance(self.meat_probe_mode, MeatProbeMode):
+            raise TypeError("Unknown meat probe mode")
+        if not isinstance(self.meater_cloud_token, str) or len(self.meater_cloud_token) > 95:
+            raise ValueError("Cloud token exceeds the device capacity")
+        if not isinstance(self.meater_mac_filter, str) or len(self.meater_mac_filter) > 17:
+            raise ValueError("MAC filter exceeds the device capacity")
         if not (100.0 <= self.setpoint_f <= 450.0):
             raise ValueError(f"setpoint_f {self.setpoint_f} must be between 100.0 and 450.0 °F")
-        if self.pid_kp < 0.0 or self.pid_kp > 100.0:
+        if not 0.0 <= self.pid_kp <= 100.0:
             raise ValueError(f"pid_kp {self.pid_kp} must be between 0.0 and 100.0")
-        if self.pid_ki < 0.0 or self.pid_ki > 10.0:
+        if not 0.0 <= self.pid_ki <= 10.0:
             raise ValueError(f"pid_ki {self.pid_ki} must be between 0.0 and 10.0")
-        if self.pid_kd < 0.0 or self.pid_kd > 500.0:
+        if not 0.0 <= self.pid_kd <= 500.0:
             raise ValueError(f"pid_kd {self.pid_kd} must be between 0.0 and 500.0")
         if not (10.0 <= self.airflow_threshold_pct <= 90.0):
             raise ValueError(

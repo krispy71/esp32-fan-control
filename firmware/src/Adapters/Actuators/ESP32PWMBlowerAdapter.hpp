@@ -3,6 +3,7 @@
 #include "../../Services/Ports/BlowerActuatorPort.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -28,6 +29,8 @@ public:
 
     void begin() noexcept {
 #ifdef ARDUINO
+        pinMode(pin_, OUTPUT);
+        digitalWrite(pin_, LOW);
         ledcSetup(channel_, freq_hz_, res_bits_);
         ledcAttachPin(pin_, channel_);
 #endif
@@ -35,7 +38,7 @@ public:
     }
 
     void setSpeed(float speed_pct) noexcept override {
-        current_speed_pct_ = std::clamp(speed_pct, 0.0f, 100.0f);
+        current_speed_pct_ = std::isfinite(speed_pct) ? std::clamp(speed_pct, 0.0f, 100.0f) : 0.0f;
 #ifdef ARDUINO
         uint32_t duty = static_cast<uint32_t>((current_speed_pct_ / 100.0f) * max_duty_);
         ledcWrite(channel_, duty);

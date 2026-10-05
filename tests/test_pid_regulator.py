@@ -1,6 +1,5 @@
 """Unit tests for discrete PID regulator."""
 
-import pytest
 from esp32_fan_control.Domain.pid import PIDConfig, PIDRegulator
 
 
@@ -38,3 +37,29 @@ def test_pid_reset() -> None:
 
     pid.reset()
     assert pid.integral == 0.0
+
+
+def test_pid_suspend_excludes_elapsed_pause_and_derivative_kick() -> None:
+    pid = PIDRegulator(225, PIDConfig(kp=0, ki=0.1, kd=15))
+    pid.compute(220, 0)
+    assert pid.compute(220, 1).value_pct == 0.5
+    integral = pid.integral
+    pid.suspend()
+    # Both the 180-second interval and changed error are excluded on recovery.
+    assert pid.compute(200, 181).value_pct == 0.5
+    assert pid.integral == integral
+    assert pid.compute(200, 182).value_pct == 3.0
+
+
+def test_pid_does_not_integrate_further_into_output_saturation() -> None:
+    pid = PIDRegulator(225, PIDConfig(kp=10, ki=1, kd=0))
+    pid.compute(200, 0)
+    assert pid.compute(200, 1).value_pct == 100
+    assert pid.integral == 0
+
+
+def test_integral_driven_saturation_still_commands_the_output_limit() -> None:
+    pid = PIDRegulator(225, PIDConfig(kp=0, ki=10, kd=0))
+    pid.compute(200, 0)
+    assert pid.compute(200, 1).value_pct == 100
+    assert pid.integral == 0

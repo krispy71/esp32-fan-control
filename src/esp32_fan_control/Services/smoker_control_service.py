@@ -1,28 +1,37 @@
-"""Smoker control orchestration service."""
+"""Smoker regulation owned by one control task, with copied command handoff."""
 
 from __future__ import annotations
 
-from esp32_fan_control.Domain.airflow import ActuatorCoordinator, AirflowDemand
+from dataclasses import replace
+
+from esp32_fan_control.Domain.airflow import ActuatorCoordinator
 from esp32_fan_control.Domain.configuration import SmokerConfig
+from esp32_fan_control.Domain.control import (
+    ControlCommandKind,
+    ControlState,
+    PersistenceStatus,
+)
 from esp32_fan_control.Domain.lid_detector import LidDetectorConfig, LidOpenDetector
 from esp32_fan_control.Domain.pid import PIDConfig, PIDRegulator
-from esp32_fan_control.Domain.temperature import SensorFault, SensorRole, TemperatureReading
-from esp32_fan_control.Services.Ports.actuator_ports import BlowerActuatorPort, DamperActuatorPort
+from esp32_fan_control.Domain.temperature import SensorRole
+from esp32_fan_control.Services.Ports.actuator_ports import (
+    BlowerActuatorPort,
+    DamperActuatorPort,
+)
 from esp32_fan_control.Services.Ports.config_storage_port import ConfigStoragePort
+from esp32_fan_control.Services.Ports.control_channel_port import ControlChannelPort
 from esp32_fan_control.Services.Ports.sensor_port import TemperatureSensorPort
-from esp32_fan_control.Services.Ports.telemetry_port import TelemetryPublisherPort, TelemetrySnapshot
+from esp32_fan_control.Services.Ports.telemetry_port import (
+    TelemetryPublisherPort,
+    TelemetrySnapshot,
+)
 
 
 class SmokerControlService:
-    """
-    Orchestrates the periodic smoker control loop:
-    1. Read chamber (pit) and food temperatures.
-    2. Check sensor health — on disconnect or fault, immediately clamp actuators to 0.
-    3. Evaluate lid-open condition.
-    4. Compute PID airflow demand.
-    5. Translate demand via ActuatorCoordinator into coordinated damper and blower commands.
-    6. Command hardware via ports.
-    7. Emit telemetry.
+    """Read sensors, enforce inhibition, compute demand, actuate and publish state.
+
+    All methods belong to the control task. Network callers use ControlChannelPort.
+    Construction has no external effects; call initialize after platform startup.
     """
 
     def __init__(
@@ -36,100 +45,115 @@ class SmokerControlService:
         pid_config: PIDConfig | None = None,
         config_storage: ConfigStoragePort | None = None,
         config: SmokerConfig | None = None,
+        control_channel: ControlChannelPort | None = None,
     ) -> None:
         self._sensor = sensor_port
         self._damper = damper_port
         self._blower = blower_port
         self._telemetry = telemetry_port
         self._config_storage = config_storage
-
-        # Load persisted config if available
-        loaded_config: SmokerConfig | None = None
-        if config is not None:
-            loaded_config = config
-        elif self._config_storage is not None:
-            loaded_config = self._config_storage.load_config()
-
-        if loaded_config is not None:
-            self._config = loaded_config
-        else:
-            kp = pid_config.kp if pid_config else 3.0
-            ki = pid_config.ki if pid_config else 0.02
-            kd = pid_config.kd if pid_config else 15.0
-            thresh = coordinator.blower_threshold_pct if coordinator else 40.0
-            self._config = SmokerConfig(
-                setpoint_f=target_setpoint_f,
-                pid_kp=kp,
-                pid_ki=ki,
-                pid_kd=kd,
-                airflow_threshold_pct=thresh,
-            )
-
-        self._setpoint_f = self._config.setpoint_f
-        self._coordinator = coordinator or ActuatorCoordinator(
-            blower_threshold_pct=self._config.airflow_threshold_pct
+        self._control_channel = control_channel
+        self._explicit_config = config is not None
+        tuning = pid_config or PIDConfig()
+        self._config = config or SmokerConfig(
+            setpoint_f=target_setpoint_f,
+            pid_kp=tuning.kp, pid_ki=tuning.ki, pid_kd=tuning.kd,
+            airflow_threshold_pct=coordinator.blower_threshold_pct if coordinator else 40.0,
         )
-        self._pid = PIDRegulator(
-            target_setpoint=self._setpoint_f,
-            config=PIDConfig(
-                kp=self._config.pid_kp,
-                ki=self._config.pid_ki,
-                kd=self._config.pid_kd,
-            ),
-        )
-        self._lid_detector = LidOpenDetector(
-            LidDetectorConfig(
-                drop_threshold_deg=self._config.lid_drop_threshold_deg,
-                pause_duration_s=self._config.lid_pause_duration_s,
-            )
-        )
-
-        self._last_pit_temp_f: float | None = None
-        self._last_meat_temp_f: float | None = None
-        self._is_fail_safe: bool = False
-        self._status_message: str = "INITIALIZED"
+        self._coordinator = coordinator or ActuatorCoordinator()
+        self._pid = PIDRegulator(self._config.setpoint_f, tuning)
+        self._lid_detector = LidOpenDetector()
+        self._initialized = False
+        self._is_fail_safe = False
         self._last_snapshot: TelemetrySnapshot | None = None
+        self._persistence = PersistenceStatus.NOT_CONFIGURED
+        self._last_command_id = 0
+        self._last_command_accepted = False
+        self._config_version = 0
+        self._revisions_reserved = False
+
+    def initialize(self) -> None:
+        """Load persisted settings, configure safe closure, and publish initial state."""
+        if self._initialized:
+            return
+        self._blower.set_speed(0.0)
+        if self._config_storage is not None:
+            loaded = self._config_storage.load_config()
+            if loaded is not None:
+                self._config = (replace(self._config, next_config_version=loaded.next_config_version)
+                    if self._explicit_config else loaded)
+            self._persistence = PersistenceStatus.UNCHANGED
+        self._config_version = self._config.next_config_version
+        self._reserve_versions()
+        self._apply_configuration()
+        self._damper.configure(self._config.damper_calibration)
+        self._damper.set_position(0.0)
+        self._initialized = True
+        self._publish_state()
 
     @property
     def config(self) -> SmokerConfig:
         return self._config
 
-    def update_config(self, new_config: SmokerConfig) -> None:
-        """Update runtime configuration and persist to storage if configured."""
-        self._config = new_config
-        self._setpoint_f = new_config.setpoint_f
-        self._pid.setpoint = new_config.setpoint_f
-        self._pid.config = PIDConfig(
-            kp=new_config.pid_kp,
-            ki=new_config.pid_ki,
-            kd=new_config.pid_kd,
+    def _apply_configuration(self) -> None:
+        self._pid.setpoint = self._config.setpoint_f
+        self._pid.config = replace(self._pid.config, kp=self._config.pid_kp,
+                                   ki=self._config.pid_ki, kd=self._config.pid_kd)
+        self._coordinator = ActuatorCoordinator(
+            self._config.airflow_threshold_pct, self._coordinator.min_blower_speed_pct
         )
-        self._coordinator = ActuatorCoordinator(blower_threshold_pct=new_config.airflow_threshold_pct)
-        self._lid_detector = LidOpenDetector(
-            LidDetectorConfig(
-                drop_threshold_deg=new_config.lid_drop_threshold_deg,
-                pause_duration_s=new_config.lid_pause_duration_s,
-            )
-        )
+        self._lid_detector.configure(LidDetectorConfig(
+            drop_threshold_deg=self._config.lid_drop_threshold_deg,
+            pause_duration_s=self._config.lid_pause_duration_s,
+        ))
+
+    def _reserve_versions(self) -> bool:
+        # One durable block per boot; skipped numbers prevent reuse after an
+        # ordinary configuration save fails but its in-memory change is applied.
+        if self._config_version >= 0xFFFFFFFE:
+            self._persistence = PersistenceStatus.FAILED
+            return False
+        reserved = replace(self._config,
+            next_config_version=min(self._config_version + 1024, 0xFFFFFFFF))
+        if self._config_storage is not None and not self._config_storage.save_config(reserved):
+            self._persistence = PersistenceStatus.FAILED
+            return False
+        self._config = reserved
+        self._revisions_reserved = True
         if self._config_storage is not None:
-            self._config_storage.save_config(new_config)
+            self._persistence = PersistenceStatus.UNCHANGED
+        return True
+
+    def update_config(self, new_config: SmokerConfig) -> bool:
+        """Apply a complete validated config and report persistence separately."""
+        if not self._initialized:
+            return False
+        if (self._config_version == 0xFFFFFFFF or
+                ((not self._revisions_reserved or
+                  self._config_version + 1 >= self._config.next_config_version)
+                 and not self._reserve_versions())):
+            return False
+        old_calibration = self._config.damper_calibration
+        self._config = replace(new_config, next_config_version=self._config.next_config_version)
+        self._apply_configuration()
+        if old_calibration != new_config.damper_calibration:
+            self._blower.set_speed(0.0)
+            self._damper.configure(new_config.damper_calibration)
+            self._damper.set_position(0.0)
+            self._pid.suspend()
+        self._config_version += 1
+        if self._config_storage is not None:
+            self._persistence = (PersistenceStatus.SAVED
+                if self._config_storage.save_config(self._config) else PersistenceStatus.FAILED)
+        return True
 
     @property
     def setpoint_f(self) -> float:
-        return self._setpoint_f
+        return self._config.setpoint_f
 
     @setpoint_f.setter
     def setpoint_f(self, value: float) -> None:
-        new_config = SmokerConfig(
-            setpoint_f=value,
-            pid_kp=self._config.pid_kp,
-            pid_ki=self._config.pid_ki,
-            pid_kd=self._config.pid_kd,
-            airflow_threshold_pct=self._config.airflow_threshold_pct,
-            lid_drop_threshold_deg=self._config.lid_drop_threshold_deg,
-            lid_pause_duration_s=self._config.lid_pause_duration_s,
-        )
-        self.update_config(new_config)
+        self.update_config(replace(self._config, setpoint_f=value))
 
     @property
     def is_fail_safe(self) -> bool:
@@ -144,103 +168,99 @@ class SmokerControlService:
         return self._last_snapshot
 
     def trigger_lid_pause(self, current_time_s: float) -> None:
-        """Manually trigger lid-open airflow pause."""
         self._lid_detector.trigger(current_time_s)
+        self._pid.suspend()
 
     def cancel_lid_pause(self) -> None:
-        """Manually cancel lid-open airflow pause and resume normal regulation."""
         self._lid_detector.reset()
 
-    def execute_cycle(self, current_time_s: float) -> TelemetrySnapshot:
-        """Execute one complete sampling and regulation iteration."""
-        # 1. Read Pit Temperature
-        pit_reading = self._sensor.read_temperature(SensorRole.PIT)
-        meat_reading = self._sensor.read_temperature(SensorRole.FOOD_1)
+    def _consume_commands(self, now: float) -> None:
+        if self._control_channel is None:
+            return
+        # Constant upper bound even when a producer replenishes the queue.
+        for _ in range(ControlChannelPort.capacity):
+            command = self._control_channel.receive()
+            if command is None:
+                break
+            self._last_command_id = command.request_id
+            self._last_command_accepted = False
+            if (command.kind in (ControlCommandKind.SET_SETPOINT, ControlCommandKind.UPDATE_CONFIG)
+                    and command.expected_config_version is not None
+                    and command.expected_config_version != self._config_version):
+                continue
+            try:
+                if command.kind == ControlCommandKind.SET_SETPOINT:
+                    self._last_command_accepted = self.update_config(
+                        replace(self._config, setpoint_f=command.setpoint_f))
+                elif command.kind == ControlCommandKind.UPDATE_CONFIG and command.config is not None:
+                    self._last_command_accepted = self.update_config(command.config)
+                elif command.kind == ControlCommandKind.TRIGGER_LID_PAUSE:
+                    self.trigger_lid_pause(now)
+                    self._last_command_accepted = True
+                elif command.kind == ControlCommandKind.CANCEL_LID_PAUSE:
+                    self.cancel_lid_pause()
+                    self._last_command_accepted = True
+            except (ValueError, TypeError):
+                # Malformed command is rejected without interrupting regulation.
+                self._last_command_accepted = False
 
-        self._last_meat_temp_f = meat_reading.fahrenheit if meat_reading.is_valid else None
+    def _publish_state(self) -> None:
+        if self._control_channel is not None:
+            self._control_channel.publish(ControlState(
+                self._config, self._last_snapshot, self._persistence,
+                self._last_command_id, self._last_command_accepted, self._config_version,
+            ))
 
-        # 2. Probe Fault / Fail-Safe Check
-        if not pit_reading.is_valid:
-            self._is_fail_safe = True
-            self._status_message = f"FAULT: {pit_reading.fault.value.upper()}"
-            self._damper.set_position(0.0)
-            self._blower.set_speed(0.0)
-            snapshot = TelemetrySnapshot(
-                timestamp_s=current_time_s,
-                pit_temp_f=None,
-                meat_temp_f=self._last_meat_temp_f,
-                setpoint_f=self._setpoint_f,
-                damper_position_pct=0.0,
-                blower_speed_pct=0.0,
-                demand_pct=0.0,
-                lid_open=False,
-                status=self._status_message,
-                is_meat_wireless=meat_reading.is_wireless,
-                meat_battery_pct=meat_reading.battery_pct,
-                meat_probe_name=meat_reading.probe_name,
-            )
-            self._last_snapshot = snapshot
-            if self._telemetry:
-                self._telemetry.publish(snapshot)
-            return snapshot
-
-        self._is_fail_safe = False
-        pit_temp_f = pit_reading.fahrenheit
-        self._last_pit_temp_f = pit_temp_f
-
-        # 3. Lid-Open Detection
-        lid_open = self._lid_detector.update(pit_temp_f, current_time_s)
-        if lid_open:
-            self._status_message = "LID_OPEN"
-            demand = AirflowDemand(0.0)
-            targets = self._coordinator.coordinate(demand)
-            self._damper.set_position(targets.damper_position_pct)
-            self._blower.set_speed(targets.blower_speed_pct)
-            snapshot = TelemetrySnapshot(
-                timestamp_s=current_time_s,
-                pit_temp_f=pit_temp_f,
-                meat_temp_f=self._last_meat_temp_f,
-                setpoint_f=self._setpoint_f,
-                damper_position_pct=targets.damper_position_pct,
-                blower_speed_pct=targets.blower_speed_pct,
-                demand_pct=0.0,
-                lid_open=True,
-                status=self._status_message,
-                is_meat_wireless=meat_reading.is_wireless,
-                meat_battery_pct=meat_reading.battery_pct,
-                meat_probe_name=meat_reading.probe_name,
-            )
-            self._last_snapshot = snapshot
-            if self._telemetry:
-                self._telemetry.publish(snapshot)
-            return snapshot
-
-        # 4. Normal Closed-Loop Regulation
-        demand = self._pid.compute(pit_temp_f, current_time_s)
-        targets = self._coordinator.coordinate(demand)
-
-        # 5. Actuate Ports
-        self._damper.set_position(targets.damper_position_pct)
-        self._blower.set_speed(targets.blower_speed_pct)
-
-        self._status_message = "REGULATING"
-        snapshot = TelemetrySnapshot(
-            timestamp_s=current_time_s,
-            pit_temp_f=round(pit_temp_f, 1),
-            meat_temp_f=round(self._last_meat_temp_f, 1) if self._last_meat_temp_f is not None else None,
-            setpoint_f=self._setpoint_f,
-            damper_position_pct=targets.damper_position_pct,
-            blower_speed_pct=targets.blower_speed_pct,
-            demand_pct=demand.value_pct,
-            lid_open=False,
-            status=self._status_message,
-            is_meat_wireless=meat_reading.is_wireless,
-            meat_battery_pct=meat_reading.battery_pct,
-            meat_probe_name=meat_reading.probe_name,
-        )
+    def _publish(self, snapshot: TelemetrySnapshot) -> TelemetrySnapshot:
         self._last_snapshot = snapshot
-
-        if self._telemetry:
+        self._publish_state()
+        if self._telemetry is not None:
             self._telemetry.publish(snapshot)
-
         return snapshot
+
+    def _stop_airflow(self) -> None:
+        self._blower.set_speed(0.0)
+        self._damper.set_position(0.0)
+
+    def execute_cycle(self, current_time_s: float) -> TelemetrySnapshot:
+        if not self._initialized:
+            self._stop_airflow()
+            return self._publish(TelemetrySnapshot(
+                current_time_s, None, None, self.setpoint_f, 0.0, 0.0, 0.0, False, "INITIALIZING"))
+        self._consume_commands(current_time_s)
+        pit = self._sensor.read_temperature(SensorRole.PIT)
+        meat = self._sensor.read_temperature(SensorRole.FOOD_1)
+        pit_f = pit.fahrenheit if pit.is_valid else None
+        meat_f = meat.fahrenheit if meat.is_valid else None
+        self._is_fail_safe = not pit.is_valid
+        lid_open = False
+        demand_pct = damper_pct = blower_pct = 0.0
+        if not pit.is_valid:
+            self._pid.suspend()
+            if not self._lid_detector.is_active:
+                self._lid_detector.reset()
+            self._stop_airflow()
+            status = "FAULT: SENSOR_INVALID"
+        else:
+            lid_open = self._lid_detector.update(pit.fahrenheit, current_time_s)
+            if lid_open:
+                self._pid.suspend()
+                self._stop_airflow()
+                status = "LID_OPEN"
+            else:
+                demand = self._pid.compute(pit.fahrenheit, current_time_s)
+                targets = self._coordinator.coordinate(demand)
+                demand_pct = demand.value_pct
+                damper_pct = targets.damper_position_pct
+                blower_pct = targets.blower_speed_pct
+                if blower_pct == 0.0:
+                    self._blower.set_speed(0.0)
+                self._damper.set_position(damper_pct)
+                if blower_pct > 0.0:
+                    self._blower.set_speed(blower_pct)
+                status = "REGULATING"
+        return self._publish(TelemetrySnapshot(
+            current_time_s, pit_f, meat_f, self.setpoint_f,
+            damper_pct, blower_pct, demand_pct, lid_open, status,
+            meat.is_wireless, meat.battery_pct, meat.probe_name,
+        ))

@@ -3,6 +3,7 @@
 #include "../../Services/Ports/DamperActuatorPort.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -15,7 +16,7 @@ class ESP32ServoDamperAdapter : public Services::Ports::IDamperActuatorPort {
 public:
     ESP32ServoDamperAdapter(
         uint8_t gpio_pin = 26,
-        uint8_t ledc_channel = 1,
+        uint8_t ledc_channel = 2,
         uint32_t min_pulse_us = 1000,
         uint32_t max_pulse_us = 2000,
         bool invert_direction = false,
@@ -31,31 +32,30 @@ public:
           last_moved_ms_(0),
           is_attached_(false) {}
 
+    void configure(const Domain::DamperCalibration& calibration) noexcept override {
+        if (!calibration.isValid()) return;
+        const bool changed = min_us_ != calibration.min_pulse_us ||
+            max_us_ != calibration.max_pulse_us || invert_ != calibration.inverted;
+        min_us_ = calibration.min_pulse_us;
+        max_us_ = calibration.max_pulse_us;
+        invert_ = calibration.inverted;
+        if (begun_ && changed) drive(current_position_pct_);
+    }
+
     void begin() noexcept {
 #ifdef ARDUINO
-        // Configure LEDC timer for 50Hz (20,000us period), 16-bit resolution (0..65535)
+        // ESP32 channels 0/1 share timer 0; channel 2 uses independent timer 1.
         ledcSetup(channel_, 50, 16);
-        ledcAttachPin(pin_, channel_);
-        is_attached_ = true;
 #endif
-        setPosition(0.0f);
+        begun_ = true;
+        drive(0.0f); // Always emit the calibrated first pulse, including inversion.
     }
 
     void setPosition(float position_pct) noexcept override {
-        float clamped = std::clamp(position_pct, 0.0f, 100.0f);
-
-        // Check if movement threshold met
-        if (std::abs(clamped - current_position_pct_) > 0.4f || !is_attached_) {
-            current_position_pct_ = clamped;
-#ifdef ARDUINO
-            if (!is_attached_) {
-                ledcAttachPin(pin_, channel_);
-                is_attached_ = true;
-            }
-            writeMicroseconds(calculatePulseUs(clamped));
-            last_moved_ms_ = millis();
-#endif
-        }
+        const float clamped = std::isfinite(position_pct) ? std::clamp(position_pct, 0.0f, 100.0f) : 0.0f;
+        if (!begun_) { current_position_pct_ = clamped; return; }
+        // An unchanged target must not undo idle detach on every control cycle.
+        if (std::abs(clamped - current_position_pct_) > 0.4f) drive(clamped);
     }
 
     /// Periodic housekeeping: auto-detaches PWM output when stationary to eliminate servo buzz
@@ -76,6 +76,16 @@ public:
     [[nodiscard]] bool isAttached() const noexcept { return is_attached_; }
 
 private:
+    void drive(float position_pct) noexcept {
+        current_position_pct_ = position_pct;
+#ifdef ARDUINO
+        if (!is_attached_) ledcAttachPin(pin_, channel_);
+        last_moved_ms_ = millis();
+#endif
+        is_attached_ = true;
+        writeMicroseconds(calculatePulseUs(position_pct));
+    }
+
     [[nodiscard]] uint32_t calculatePulseUs(float pct) const noexcept {
         float effective_pct = invert_ ? (100.0f - pct) : pct;
         return min_us_ + static_cast<uint32_t>((effective_pct / 100.0f) * (max_us_ - min_us_));
@@ -101,6 +111,7 @@ private:
     float current_position_pct_;
     uint32_t last_moved_ms_;
     bool is_attached_;
+    bool begun_{false};
 };
 
 } // namespace SmokerController::Adapters::Actuators

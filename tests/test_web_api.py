@@ -1,179 +1,349 @@
-"""Tests for WebServerAdapter REST endpoints and static file serving."""
-
-from __future__ import annotations
-
+"""Real HTTPS boundary tests: authorization, validation, queued state and persistence."""
+import base64
+import http.client
 import json
-import urllib.request
-import urllib.error
+import socket
+import shutil
+import os
+from pathlib import Path
+import ssl
+import subprocess
+import sys
+import time
+import threading
+
 import pytest
+
+from esp32_fan_control.Adapters.control_channel_adapter import ThreadedControlChannel
+from esp32_fan_control.Adapters.json_config_adapter import JsonConfigAdapter
 from esp32_fan_control.Adapters.web_server_adapter import WebServerAdapter
-from esp32_fan_control.Domain.temperature import SensorFault, SensorRole, TemperatureReading
-from esp32_fan_control.Services.Ports.actuator_ports import BlowerActuatorPort, DamperActuatorPort
-from esp32_fan_control.Services.Ports.sensor_port import TemperatureSensorPort
+from esp32_fan_control.Controller.cli import ConsoleActuator, SimulatedSensor
+from esp32_fan_control.Domain.control import ControlCommand, ControlCommandKind
 from esp32_fan_control.Services.smoker_control_service import SmokerControlService
 
 
-class DummySensor(TemperatureSensorPort):
-    def __init__(self, pit_f: float = 225.0) -> None:
-        self.pit_f = pit_f
-
-    def read_temperature(self, role: SensorRole) -> TemperatureReading:
-        if role == SensorRole.PIT:
-            return TemperatureReading.from_fahrenheit(self.pit_f, role, 1.0, fault=SensorFault.OK)
-        return TemperatureReading.from_fahrenheit(150.0, role, 1.0, fault=SensorFault.OK)
+@pytest.fixture(scope="session")
+def access(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("https") / "device"
+    subprocess.run([sys.executable, "tools/provision_device.py", "--output", str(directory)], check=True, capture_output=True)
+    password = next(line.split(": ", 1)[1] for line in (directory / "operator-access.txt").read_text().splitlines() if line.startswith("HTTPS password:"))
+    return directory, password
 
 
-class DummyActuator(DamperActuatorPort, BlowerActuatorPort):
-    def __init__(self) -> None:
-        self.damper = 0.0
-        self.blower = 0.0
+class RunningController:
+    def __init__(self, directory, access, storage=None):
+        self.channel = ThreadedControlChannel()
+        self.actuator = ConsoleActuator()
+        self.storage = storage or JsonConfigAdapter(directory / "settings.json")
+        self.sensor = SimulatedSensor()
+        self.service = SmokerControlService(self.sensor, self.actuator, self.actuator,
+                                           config_storage=self.storage, control_channel=self.channel)
+        self.service.initialize()
+        self.service.execute_cycle(0.0)
+        self.server = WebServerAdapter(self.channel, port=0, access_dir=access[0])
+        self.server.start()
+        self.context = ssl.create_default_context(cafile=str(access[0] / "device-ca.pem"))
+        self.auth = "Basic " + base64.b64encode(f"admin:{access[1]}".encode()).decode()
+        self.origin = f"https://127.0.0.1:{self.server.port}"
 
-    def set_position(self, p: float) -> None:
-        self.damper = p
+    def request(self, path, body=None, authorized=True, headers=None, raw=None):
+        connection = http.client.HTTPSConnection("127.0.0.1", self.server.port, context=self.context, timeout=5)
+        combined = {"Authorization": self.auth} if authorized else {}
+        if body is not None or raw is not None:
+            combined["Content-Type"] = "application/json"
+        combined.update(headers or {})
+        payload = raw if raw is not None else json.dumps(body).encode() if body is not None else None
+        connection.request("POST" if payload is not None else "GET", path, payload, combined)
+        response = connection.getresponse()
+        data = response.read()
+        result = response.status, data, dict(response.getheaders())
+        connection.close()
+        return result
 
-    def set_speed(self, s: float) -> None:
-        self.blower = s
+    def apply(self):
+        self.service.execute_cycle(time.monotonic())
+
+    def mutation(self, values, path="/api/config"):
+        version = self.channel.snapshot().config_version
+        return self.request(path, {"config_version": version, **values})
 
 
 @pytest.fixture
-def running_server():
-    sensor = DummySensor(pit_f=224.5)
-    actuator = DummyActuator()
-    service = SmokerControlService(
-        sensor_port=sensor,
-        damper_port=actuator,
-        blower_port=actuator,
-        target_setpoint_f=225.0,
-    )
-    # Execute one cycle so there is an active snapshot
-    service.execute_cycle(1.0)
+def controller(tmp_path, access):
+    app = RunningController(tmp_path, access)
+    yield app
+    app.server.stop()
 
-    # Use port 0 to bind to an ephemeral OS-assigned port
-    adapter = WebServerAdapter(service=service, host="127.0.0.1", port=0)
-    adapter.start(background=True)
+
+def test_unprovisioned_and_untrusted_tls_fail_closed(tmp_path):
+    server = WebServerAdapter(ThreadedControlChannel(), access_dir=tmp_path)
+    with pytest.raises((ValueError, OSError)):
+        server.start()
+    assert not server.is_running
+
+
+@pytest.mark.parametrize("invalid_hash", [None, 42, [], {}])
+def test_invalid_private_provisioning_keeps_cli_control_running(tmp_path, access, invalid_hash):
+    directory = tmp_path / "invalid-access"
+    shutil.copytree(access[0], directory)
+    path = directory / "device-access.json"
+    config = json.loads(path.read_text())
+    config["password_sha256"] = invalid_hash
+    path.write_text(json.dumps(config))
+    run = subprocess.run([sys.executable, "-m", "esp32_fan_control.Controller.cli", "--web",
+                          "--access-dir", str(directory), "--cycles", "1", "--config-file", str(tmp_path / "config.json")],
+                         env={**os.environ, "PYTHONPATH": str(Path.cwd() / "src")}, capture_output=True, text=True, timeout=5)
+    assert run.returncode == 0
+    assert "HTTPS disabled" in run.stdout and "Starting control loop" in run.stdout
+
+
+def test_deployed_tls_key_cannot_issue_unrelated_certificates(tmp_path, access):
+    # Demonstrate the compromise boundary using the same OpenSSL verifier as TLS.
+    request = tmp_path / "unrelated.csr"
+    subprocess.run(["openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                    "-nodes", "-subj", "/CN=unrelated.example", "-keyout", str(tmp_path / "key.pem"),
+                    "-out", str(request)], check=True, capture_output=True)
+    issued = tmp_path / "issued.pem"
+    subprocess.run(["openssl", "x509", "-req", "-in", str(request), "-CA", str(access[0] / "device-cert.pem"),
+                    "-CAkey", str(access[0] / "device-key.pem"), "-set_serial", "2", "-days", "1",
+                    "-out", str(issued)], check=True, capture_output=True)
+    chain = tmp_path / "chain.pem"
+    chain.write_bytes((access[0] / "device-cert.pem").read_bytes())
+    verify = subprocess.run(["openssl", "verify", "-CAfile", str(access[0] / "device-ca.pem"),
+                             "-untrusted", str(chain), "-purpose", "sslserver", "-verify_hostname",
+                             "unrelated.example", str(issued)], capture_output=True)
+    assert verify.returncode != 0
+
+
+@pytest.mark.parametrize("phase", ["handshake", "headers", "body"])
+def test_slow_clients_cannot_hold_all_workers_indefinitely(controller, monkeypatch, phase):
+    from esp32_fan_control.Adapters import web_server_adapter
+    monkeypatch.setattr(web_server_adapter, "_MAX_REQUEST_SECONDS", 0.6)
+    clients = []
+    finished = threading.Event()
     try:
-        yield adapter, service
+        for _ in range(4):
+            raw = socket.create_connection(("127.0.0.1", controller.server.port), timeout=1)
+            if phase == "handshake":
+                clients.append(raw)
+                continue
+            client = controller.context.wrap_socket(raw, server_hostname="127.0.0.1")
+            clients.append(client)
+            if phase == "headers":
+                client.sendall(b"GET /api/config HTTP/1.1\r\nX-Slow: ")
+            else:
+                client.sendall((f"POST /api/config HTTP/1.1\r\nHost: 127.0.0.1:{controller.server.port}\r\n"
+                                f"Authorization: {controller.auth}\r\nContent-Type: application/json\r\n"
+                                "Content-Length: 100\r\n\r\n{").encode())
+
+        def dribble():
+            while not finished.wait(0.05):
+                for client in clients:
+                    try:
+                        client.sendall(b" " if phase != "handshake" else b"\x16")
+                    except OSError:
+                        pass
+
+        sender = threading.Thread(target=dribble, daemon=True)
+        sender.start()
+        # Even with ongoing activity, workers must be reclaimed by a fixed bound.
+        time.sleep(0.9)
+        assert controller.request("/api/config")[0] == 200
     finally:
-        adapter.stop()
+        finished.set()
+        for client in clients:
+            client.close()
+        if "sender" in locals():
+            sender.join(timeout=1)
 
 
-def test_get_static_index(running_server):
-    adapter, _ = running_server
-    url = f"http://127.0.0.1:{adapter.port}/"
-    with urllib.request.urlopen(url) as response:
-        assert response.status == 200
-        content_type = response.headers.get("Content-Type", "")
-        assert "text/html" in content_type
-        body = response.read().decode("utf-8")
-        assert "<title>ESP32 Smoker Controller</title>" in body
+def test_auth_required_for_every_route_and_fixed_asset_allowlist(controller):
+    for path in ("/", "/app.js", "/style.css", "/api/config", "/api/telemetry", "/api/command?id=1"):
+        status, _, headers = controller.request(path, authorized=False)
+        assert status == 401
+        assert headers["WWW-Authenticate"].startswith("Basic")
+    for path in ("/api/config", "/api/setpoint", "/api/lid-pause"):
+        assert controller.request(path, {}, authorized=False)[0] == 401
+    assert controller.request("/api/config", headers={"Authorization": "Basic invalid"})[0] == 401
+    for path in ("/device-access.json", "/device-key.pem", "/../device-access.json", "/operator-access.txt"):
+        assert controller.request(path)[0] == 404
+    with pytest.raises(ssl.SSLCertVerificationError):
+        connection = http.client.HTTPSConnection("127.0.0.1", controller.server.port, timeout=5)
+        connection.request("GET", "/")
 
 
-def test_get_static_assets(running_server):
-    adapter, _ = running_server
-    # CSS
-    url_css = f"http://127.0.0.1:{adapter.port}/style.css"
-    with urllib.request.urlopen(url_css) as response:
-        assert response.status == 200
-        assert "text/css" in response.headers.get("Content-Type", "")
-        css_body = response.read().decode("utf-8")
-        assert "app-container" in css_body
-
-    # JS
-    url_js = f"http://127.0.0.1:{adapter.port}/app.js"
-    with urllib.request.urlopen(url_js) as response:
-        assert response.status == 200
-        assert "javascript" in response.headers.get("Content-Type", "")
-        js_body = response.read().decode("utf-8")
-        assert "trendChart" in js_body
+def test_origin_host_content_type_and_body_limits(controller):
+    assert controller.mutation({"pid_kp": 5})[0] == 202
+    # An unauthorized origin is rejected even with an otherwise valid credential.
+    assert controller.request("/api/config", {"pid_kp": 9}, headers={"Origin": "https://attacker.example"})[0] == 403
+    assert controller.request("/api/config", headers={"Host": "attacker.example"})[0] == 403
+    assert controller.request("/api/config", {}, headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert controller.request("/api/config", {}, headers={"Content-Type": "text/plain"})[0] == 415
+    assert controller.request("/api/config", raw=b" " * 2049)[0] == 413
+    assert "Access-Control-Allow-Origin" not in controller.request("/api/config")[2]
 
 
-def test_get_telemetry_endpoint(running_server):
-    adapter, service = running_server
-    url = f"http://127.0.0.1:{adapter.port}/api/telemetry"
-    with urllib.request.urlopen(url) as response:
-        assert response.status == 200
-        assert "application/json" in response.headers.get("Content-Type", "")
-        data = json.loads(response.read().decode("utf-8"))
-
-        assert data["pit_temp_f"] == 224.5
-        assert data["setpoint_f"] == 225.0
-        assert data["is_pit_valid"] is True
-        assert data["lid_open"] is False
-        assert "status" in data
-
-
-def test_post_setpoint_endpoint(running_server):
-    adapter, service = running_server
-    url = f"http://127.0.0.1:{adapter.port}/api/setpoint"
-
-    payload = json.dumps({"setpoint": 275.0}).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req) as response:
-        assert response.status == 200
-        resp_data = json.loads(response.read().decode("utf-8"))
-        assert resp_data["status"] == "ok"
-        assert resp_data["setpoint"] == 275.0
-        assert service.setpoint_f == 275.0
+@pytest.mark.parametrize("raw", [
+    b'{"config_version":0,"pid_kp":1,"pid_kp":2}', b'{"config_version":0,"pid_kp":NaN}',
+    b'{"config_version":0,"pid_kp":true}', b'{"config_version":0,"unknown":1}',
+    b'{"config_version":0,"servo_inverted":"false"}', b'{"config_version":0,"servo_min_pulse_us":1000.5}',
+    b'{"config_version":0,"servo_min_pulse_us":2400,"servo_max_pulse_us":1000}',
+    b'{"config_version":0,"servo_max_pulse_us":2501}', b'{"config_version":0,"meat_probe_mode":9}',
+    b'{"config_version":0,"meater_mac_filter":"not a mac"}', b'[]', b'{' + b'"x":[' * 30 + b'0' + b']' * 30 + b'}',
+])
+def test_invalid_inputs_do_not_acquire_control_authority(controller, raw):
+    before = controller.channel.snapshot()
+    assert controller.request("/api/config", raw=raw)[0] == 400
+    controller.apply()
+    assert controller.channel.snapshot().config == before.config
 
 
-def test_post_setpoint_validation(running_server):
-    adapter, _ = running_server
-    url = f"http://127.0.0.1:{adapter.port}/api/setpoint"
-
-    # Out of range (< 100°F)
-    payload_low = json.dumps({"setpoint": 50.0}).encode("utf-8")
-    req_low = urllib.request.Request(url, data=payload_low, headers={"Content-Type": "application/json"})
-    with pytest.raises(urllib.error.HTTPError) as exc_low:
-        urllib.request.urlopen(req_low)
-    assert exc_low.value.code == 400
-
-    # Non-numeric
-    payload_bad = json.dumps({"setpoint": "invalid"}).encode("utf-8")
-    req_bad = urllib.request.Request(url, data=payload_bad, headers={"Content-Type": "application/json"})
-    with pytest.raises(urllib.error.HTTPError) as exc_bad:
-        urllib.request.urlopen(req_bad)
-    assert exc_bad.value.code == 400
+def test_calibration_queued_applied_persisted_and_restored(controller):
+    status, raw, _ = controller.mutation({"servo_min_pulse_us": 800, "servo_max_pulse_us": 2200, "servo_inverted": True})
+    assert status == 202
+    command = json.loads(raw)
+    assert controller.service.config.servo_min_pulse_us == 1000  # HTTP never mutates the owner.
+    assert controller.request(f"/api/command?id={command['request_id']}")[0] == 202
+    controller.apply()
+    result = json.loads(controller.request(f"/api/command?id={command['request_id']}")[1])
+    assert result["status"] == "applied" and result["persistence"] == "saved"
+    assert controller.actuator.calibration.min_pulse_us == 800
+    restored = SmokerControlService(SimulatedSensor(), ConsoleActuator(), ConsoleActuator(), config_storage=controller.storage)
+    restored.initialize()
+    assert restored.config.servo_inverted and restored.config.servo_max_pulse_us == 2200
+    assert controller.storage.path.stat().st_mode & 0o077 == 0
 
 
-def test_post_lid_pause_endpoint(running_server):
-    adapter, service = running_server
-    url = f"http://127.0.0.1:{adapter.port}/api/lid-pause"
+def test_setpoint_queued_applied_acknowledged_and_persisted(controller):
+    for target in (175.0, 275.5):
+        before = controller.channel.snapshot()
+        outputs = controller.actuator.damper_pct, controller.actuator.blower_pct
+        persisted = controller.storage.path.read_bytes() if controller.storage.path.exists() else None
+        status, raw, _ = controller.mutation({"setpoint": target}, "/api/setpoint")
+        assert status == 202
+        command = json.loads(raw)
+        assert command["status"] == "queued"
+        result_path = f"/api/command?id={command['request_id']}"
+        status, raw, _ = controller.request(result_path)
+        assert status == 202 and json.loads(raw)["status"] == "queued"
+        # The HTTPS worker cannot mutate settings, persistence or outputs itself.
+        assert controller.service.config == before.config
+        assert (controller.actuator.damper_pct, controller.actuator.blower_pct) == outputs
+        assert json.loads(controller.request("/api/config")[1])["setpoint_f"] == before.config.setpoint_f
+        assert (controller.storage.path.read_bytes() if controller.storage.path.exists() else None) == persisted
 
-    # 1. Trigger pause
-    req1 = urllib.request.Request(url, data=json.dumps({"action": "pause"}).encode("utf-8"), headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req1) as resp1:
-        assert resp1.status == 200
-        data1 = json.loads(resp1.read().decode("utf-8"))
-        assert data1["lid_open"] is True
-        assert service.is_lid_open is True
+        controller.apply()
+        status, raw, _ = controller.request(result_path)
+        assert status == 200
+        assert json.loads(raw) == {
+            "request_id": command["request_id"], "status": "applied",
+            "persistence": "saved", "config_version": before.config_version + 1,
+        }
+        assert controller.service.setpoint_f == target
+        assert json.loads(controller.request("/api/config")[1])["setpoint_f"] == target
+        assert json.loads(controller.storage.path.read_text())["setpoint_f"] == target
+        telemetry = json.loads(controller.request("/api/telemetry")[1])
+        assert telemetry["setpoint_f"] == target
+        assert telemetry["status"] == "REGULATING" and telemetry["lid_open"] is False
+        assert telemetry["damper_position_pct"] == controller.actuator.damper_pct
+        assert telemetry["blower_speed_pct"] == controller.actuator.blower_pct
+        if target < controller.sensor.pit_f:
+            assert controller.actuator.damper_pct == controller.actuator.blower_pct == 0
+        else:
+            assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
+        restored = SmokerControlService(SimulatedSensor(), ConsoleActuator(), ConsoleActuator(),
+                                       config_storage=controller.storage)
+        restored.initialize()
+        assert restored.setpoint_f == target
 
-    # 2. Resume
-    req2 = urllib.request.Request(url, data=json.dumps({"action": "resume"}).encode("utf-8"), headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req2) as resp2:
-        assert resp2.status == 200
-        data2 = json.loads(resp2.read().decode("utf-8"))
-        assert data2["lid_open"] is False
-        assert service.is_lid_open is False
+
+def test_lid_pause_and_resume_apply_at_owner_with_actuator_effects(controller):
+    before = controller.channel.snapshot()
+    stored_before = controller.storage.path.read_bytes()
+    assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
+    for action in ("pause", "resume"):
+        pause = action == "pause"
+        outputs = controller.actuator.damper_pct, controller.actuator.blower_pct
+        status, raw, _ = controller.mutation({"action": action}, "/api/lid-pause")
+        assert status == 202
+        command = json.loads(raw)
+        assert command["status"] == "queued"
+        result_path = f"/api/command?id={command['request_id']}"
+        status, raw, _ = controller.request(result_path)
+        assert status == 202 and json.loads(raw)["status"] == "queued"
+        assert controller.service.is_lid_open is not pause
+        assert (controller.actuator.damper_pct, controller.actuator.blower_pct) == outputs
+        assert json.loads(controller.request("/api/telemetry")[1])["lid_open"] is not pause
+
+        controller.apply()
+        status, raw, _ = controller.request(result_path)
+        assert status == 200
+        assert json.loads(raw) == {
+            "request_id": command["request_id"], "status": "applied",
+            "persistence": "unchanged", "config_version": before.config_version,
+        }
+        assert controller.service.is_lid_open is pause
+        telemetry = json.loads(controller.request("/api/telemetry")[1])
+        assert telemetry["lid_open"] is pause
+        assert telemetry["status"] == ("LID_OPEN" if pause else "REGULATING")
+        assert telemetry["damper_position_pct"] == controller.actuator.damper_pct
+        assert telemetry["blower_speed_pct"] == controller.actuator.blower_pct
+        if pause:
+            assert telemetry["demand_pct"] == 0
+            assert controller.actuator.damper_pct == controller.actuator.blower_pct == 0
+        else:
+            assert telemetry["demand_pct"] > 0
+            assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
+        assert controller.service.config == before.config
+        assert controller.storage.path.read_bytes() == stored_before  # Lid controls do not save changes.
 
 
-def test_get_and_post_config_endpoint(running_server):
-    adapter, service = running_server
-    url = f"http://127.0.0.1:{adapter.port}/api/config"
+def test_stale_updates_rejected_in_http_and_at_owner(controller):
+    assert controller.mutation({"pid_kp": 5})[0] == 202
+    controller.apply()
+    assert controller.request("/api/config", {"config_version": 0, "pid_kp": 9})[0] == 409
+    controller.channel.submit(ControlCommand(ControlCommandKind.SET_SETPOINT, setpoint_f=250, request_id=90))
+    status, raw, _ = controller.mutation({"pid_kp": 9})
+    assert status == 202
+    controller.apply()
+    assert controller.channel.snapshot().config.pid_kp == 5
+    result = json.loads(controller.request(f"/api/command?id={json.loads(raw)['request_id']}")[1])
+    assert result["status"] == "rejected"
 
-    # GET config
-    with urllib.request.urlopen(url) as resp:
-        assert resp.status == 200
-        cfg = json.loads(resp.read().decode("utf-8"))
-        assert cfg["setpoint_f"] == 225.0
-        assert cfg["pid_kp"] == 3.0
 
-    # POST updated config
-    payload = json.dumps({"setpoint_f": 260.0, "pid_kp": 5.0}).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req) as resp:
-        assert resp.status == 200
-        res_data = json.loads(resp.read().decode("utf-8"))
-        assert res_data["status"] == "ok"
-        assert service.setpoint_f == 260.0
-        assert service.config.pid_kp == 5.0
+def test_cloud_token_write_only_and_preserved(controller):
+    # Generated test material is deliberately never printed or included in assertion output.
+    import secrets
+    token = secrets.token_urlsafe(24)
+    assert controller.mutation({"meater_cloud_token": token})[0] == 202
+    controller.apply()
+    status, raw, headers = controller.request("/api/config")
+    config = json.loads(raw)
+    assert status == 200 and "meater_cloud_token" not in config
+    assert config["meater_cloud_token_configured"] is True
+    assert token.encode() not in raw
+    assert headers["Cache-Control"] == "no-store"
+    assert controller.mutation({"servo_min_pulse_us": 900})[0] == 202
+    controller.apply()
+    assert controller.service.config.meater_cloud_token == token
+    assert controller.mutation({"meater_cloud_token": ""})[0] == 202
+    controller.apply()
+    assert controller.service.config.meater_cloud_token == ""
 
+
+def test_storage_failure_is_reported_without_claiming_saved(tmp_path, access):
+    class FailedStorage:
+        writes = 0
+        def load_config(self): return None
+        def save_config(self, config):
+            self.writes += 1
+            return self.writes == 1  # Reserve at startup; fail the configuration save.
+    app = RunningController(tmp_path, access, FailedStorage())
+    try:
+        status, raw, _ = app.mutation({"servo_min_pulse_us": 900})
+        assert status == 202
+        app.apply()
+        result = json.loads(app.request(f"/api/command?id={json.loads(raw)['request_id']}")[1])
+        assert result["status"] == "applied" and result["persistence"] == "failed"
+    finally:
+        app.server.stop()

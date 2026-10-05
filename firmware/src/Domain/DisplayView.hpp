@@ -5,7 +5,7 @@
 #include <cstring>
 #include <cmath>
 #include "Temperature.hpp"
-#include "../Services/Ports/TelemetryPort.hpp"
+#include "Telemetry.hpp"
 
 namespace SmokerController::Domain {
 
@@ -29,7 +29,7 @@ struct DisplayView {
     char meat_probe_name[32]{""};
     uint32_t timestamp_ms{0};
 
-    [[nodiscard]] static DisplayView fromTelemetry(const Services::Ports::TelemetrySnapshot& s) noexcept {
+    [[nodiscard]] static DisplayView fromTelemetry(const TelemetrySnapshot& s) noexcept {
         DisplayView v{};
         v.pit_temp_f = s.pit_temp_f;
         v.pit_valid = s.is_pit_valid;
@@ -44,14 +44,10 @@ struct DisplayView {
         v.meat_battery_pct = s.meat_battery_pct;
         v.timestamp_ms = s.timestamp_ms;
 
-        if (s.status) {
-            std::strncpy(v.status, s.status, sizeof(v.status) - 1);
-            v.status[sizeof(v.status) - 1] = '\0';
-        }
-        if (s.meat_probe_name) {
-            std::strncpy(v.meat_probe_name, s.meat_probe_name, sizeof(v.meat_probe_name) - 1);
-            v.meat_probe_name[sizeof(v.meat_probe_name) - 1] = '\0';
-        }
+        std::strncpy(v.status, s.status, sizeof(v.status) - 1);
+        v.status[sizeof(v.status) - 1] = '\0';
+        std::strncpy(v.meat_probe_name, s.meat_probe_name, sizeof(v.meat_probe_name) - 1);
+        v.meat_probe_name[sizeof(v.meat_probe_name) - 1] = '\0';
         return v;
     }
 

@@ -44,6 +44,13 @@ public:
         initialized_ = false;
     }
 
+    // Preserve accumulated steady-state bias, but exclude inhibited time and error
+    // changes from the next integration and derivative update.
+    void suspend() noexcept {
+        initialized_ = false;
+        filtered_derivative_ = 0.0f;
+    }
+
     AirflowDemand compute(float current_temp, uint32_t current_time_ms) noexcept {
         const float error = setpoint_ - current_temp;
 
@@ -52,7 +59,7 @@ public:
             last_time_ms_ = current_time_ms;
             last_error_ = error;
             float p_term = config_.kp * error;
-            return AirflowDemand{std::clamp(p_term, config_.output_min, config_.output_max)};
+            return AirflowDemand{std::clamp(p_term + config_.ki * integral_, config_.output_min, config_.output_max)};
         }
 
         float dt = static_cast<float>(current_time_ms - last_time_ms_) / 1000.0f;
@@ -64,9 +71,9 @@ public:
         float p_term = config_.kp * error;
 
         // 2. Integral term with anti-windup accumulator clamp
-        integral_ += (error * dt);
-        integral_ = std::clamp(integral_, config_.integral_min, config_.integral_max);
-        float i_term = config_.ki * integral_;
+        const float candidate_integral = std::clamp(integral_ + error * dt,
+            config_.integral_min, config_.integral_max);
+        float i_term = config_.ki * candidate_integral;
 
         // 3. Filtered derivative term
         float raw_derivative = (error - last_error_) / dt;
@@ -76,6 +83,11 @@ public:
 
         // 4. Output with saturation clamp
         float total = p_term + i_term + d_term;
+        // Do not integrate further into output saturation; permit unwinding.
+        if (!((total > config_.output_max && error > 0.0f) ||
+              (total < config_.output_min && error < 0.0f))) {
+            integral_ = candidate_integral;
+        }
         float output = std::clamp(total, config_.output_min, config_.output_max);
 
         last_error_ = error;
