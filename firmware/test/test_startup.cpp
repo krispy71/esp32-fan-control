@@ -22,10 +22,14 @@ int main() {
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::duty.at(0) == 0); // First conversion is not ready at task launch.
     Spy::now = 200;
+    Spy::transferDelayMs = 1; // Crossing a clock tick during actual acquisition must not detach.
     // Real control entry point: a healthy sample drives outputs, then a pit fault clamps.
     Spy::response = {0x04,0xB0,0,0,0x04,0xB0,0,0}; // 75 C => active demand below 225 F target
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::duty.at(0) > 0);
+    assert(Spy::duty.at(2) == 800ULL * 65535 / 20000);
+    assert(Spy::count("detach", 26) == 0);
+    Spy::transferDelayMs = 0;
     assert(Spy::lastDelayTicks == 20);
     Spy::clear(); Spy::now = 220; Spy::delaysBeforeYield = 79;
     Spy::response = {0x04,0xB0,0,0,0x04,0xB0,0,0};
@@ -33,9 +37,10 @@ int main() {
     assert(Spy::count("transfer", 5) == 8); // 1Hz acquisition across 80 x 20ms ticks.
     assert(Spy::count("detach", 26) == 1); // 1.5s idle deadline serviced on owning task.
 
-    Spy::now = 2000; Spy::response = {0,1,0,1};
+    Spy::now = 2000; Spy::response = {0,1,0,1}; Spy::transferDelayMs = 1;
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::duty.at(0) == 0 && Spy::duty.at(2) == 2200ULL * 65535 / 20000);
+    Spy::transferDelayMs = 0;
     try { Spy::tasks[1].entry(Spy::tasks[1].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::count("networkBegin") == 1);
     Spy::clear(); loop(); assert(Spy::events.empty());

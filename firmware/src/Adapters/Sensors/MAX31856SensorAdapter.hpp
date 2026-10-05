@@ -6,8 +6,10 @@ namespace SmokerController::Adapters::Sensors {
 // MAX31856 rev. 0, pp. 15, 18-20, 24-25:
 // https://www.analog.com/media/en/technical-documentation/data-sheets/max31856.pdf
 // SPI mode 1 (CPHA=1), MSB first, 1 MHz (below 5 MHz limit).
-// CR1=0x03: K type, one sample; CR0=0x90: continuous, open detection,
+// CR1=0x03: K type, one sample; CR0=0x10: normally off, open detection,
 // cold junction enabled, comparator faults, 60 Hz filter. MOSI is required.
+// Each one-shot includes an open-circuit test. Continuous mode only tests every
+// 16 conversions, which can leave the pit disconnected through a control sample.
 class MAX31856SensorAdapter final : public Services::Ports::ITemperatureSensorPort {
 public:
     explicit MAX31856SensorAdapter(Hardware::SharedSpiBus& bus,
@@ -19,9 +21,16 @@ public:
         pinMode(cs_pit_, OUTPUT);
         digitalWrite(cs_pit_, HIGH);
         if (cs_food1_ >= 0) { pinMode(cs_food1_, OUTPUT); digitalWrite(cs_food1_, HIGH); }
-        pit_ready_ = initializeChip(cs_pit_);
-        if (cs_food1_ >= 0) food_ready_ = initializeChip(static_cast<uint8_t>(cs_food1_));
-        started_ms_ = millis();
+        initializeConversion(pit_, cs_pit_);
+        if (cs_food1_ >= 0) initializeConversion(food_, static_cast<uint8_t>(cs_food1_));
+#endif
+    }
+    // Called on the control owner task at 20 ms cadence; conversion waits never
+    // block servo housekeeping. A completed, fault-checked reading is cached.
+    void update() noexcept {
+#ifdef ARDUINO
+        updateConversion(pit_, cs_pit_);
+        if (cs_food1_ >= 0) updateConversion(food_, static_cast<uint8_t>(cs_food1_));
 #endif
     }
     Domain::TemperatureReading readTemperature(Domain::SensorRole role) noexcept override {
@@ -32,19 +41,14 @@ public:
         if (role != Domain::SensorRole::Pit && (role != Domain::SensorRole::Food1 || cs_food1_ < 0))
             return Domain::TemperatureReading{0.0f, role, now, Domain::SensorFault::Disconnected};
 #ifdef ARDUINO
-        if (!(role == Domain::SensorRole::Pit ? pit_ready_ : food_ready_))
+        const auto& conversion = role == Domain::SensorRole::Pit ? pit_ : food_;
+        if (!conversion.configured)
             return Domain::TemperatureReading{0.0f, role, now, Domain::SensorFault::Disconnected};
-        // Keep regulation inhibited until the initial conversion/open test completes.
-        if (now - started_ms_ < 250) return Domain::TemperatureReading{0.0f, role, now, Domain::SensorFault::Stale};
-        const uint8_t cs = role == Domain::SensorRole::Pit ? cs_pit_ : static_cast<uint8_t>(cs_food1_);
-        Hardware::SharedSpiBus::Frame frame(bus_, cs, 1000000, SPI_MODE1);
-        if (!frame) return Domain::TemperatureReading{0.0f, role, now, Domain::SensorFault::Disconnected};
-        frame.transfer(0x0C); // contiguous LTCBH, LTCBM, LTCBL, fault status
-        uint32_t raw = frame.transfer(0);
-        raw = (raw << 8) | frame.transfer(0);
-        raw = (raw << 8) | frame.transfer(0);
-        const uint8_t fault = frame.transfer(0);
-        return decodeRawReading(raw, fault, role, now);
+        auto reading = conversion.reading;
+        reading.role = role;
+        // A missed upkeep call or hung conversion must not preserve old health.
+        if (now - reading.timestamp_ms > FRESHNESS_MS) reading.fault = Domain::SensorFault::Stale;
+        return reading;
 #else
         return Domain::TemperatureReading{0.0f, role, now, Domain::SensorFault::Disconnected};
 #endif
@@ -57,7 +61,68 @@ public:
         return Domain::TemperatureReading{static_cast<float>(signed_value) / 128.0f, role, now, Domain::SensorFault::Ok};
     }
 private:
+    struct Conversion {
+        bool configured{false};
+        bool pending{false};
+        uint32_t started_ms{0};
+        Domain::TemperatureReading reading{0.0f, Domain::SensorRole::Pit, 0, Domain::SensorFault::Stale};
+    };
+    // Datasheet pp. 4,14: first/one-shot conversion <=155 ms at 60 Hz,
+    // open-circuit test <=15 ms with cold-junction sensing enabled.
+    static constexpr uint32_t CONVERSION_WAIT_MS = 170;
+    static constexpr uint32_t CONVERSION_TIMEOUT_MS = 250;
+    static constexpr uint32_t FRESHNESS_MS = 500;
 #ifdef ARDUINO
+    void initializeConversion(Conversion& conversion, uint8_t cs) noexcept {
+        conversion = Conversion{};
+        conversion.configured = initializeChip(cs);
+        if (conversion.configured) startConversion(conversion, cs);
+    }
+    void failConversion(Conversion& conversion, Domain::SensorFault fault) noexcept {
+        conversion.reading = {0.0f, Domain::SensorRole::Pit, millis(), fault};
+        conversion.pending = false;
+    }
+    void startConversion(Conversion& conversion, uint8_t cs) noexcept {
+        if (!writeRegister(cs, 0x00, 0x50)) {
+            failConversion(conversion, Domain::SensorFault::Disconnected);
+            return;
+        }
+        conversion.started_ms = millis();
+        conversion.pending = true;
+    }
+    void updateConversion(Conversion& conversion, uint8_t cs) noexcept {
+        if (!conversion.configured) return;
+        if (!conversion.pending) { startConversion(conversion, cs); return; }
+        const uint32_t elapsed = millis() - conversion.started_ms;
+        if (elapsed < CONVERSION_WAIT_MS) return;
+        uint8_t cr0 = 0;
+        {
+            Hardware::SharedSpiBus::Frame frame(bus_, cs, 1000000, SPI_MODE1);
+            if (!frame) { failConversion(conversion, Domain::SensorFault::Disconnected); return; }
+            frame.transfer(0x00);
+            cr0 = frame.transfer(0);
+        }
+        if (cr0 == 0x50) { // One-shot bit clears only when fresh data is ready.
+            if (elapsed >= CONVERSION_TIMEOUT_MS) failConversion(conversion, Domain::SensorFault::Stale);
+            return;
+        }
+        if (cr0 != 0x10) { // Reset, missing chip, or lost conversion configuration.
+            failConversion(conversion, Domain::SensorFault::Disconnected);
+            conversion.configured = false;
+            return;
+        }
+        {
+            Hardware::SharedSpiBus::Frame frame(bus_, cs, 1000000, SPI_MODE1);
+            if (!frame) { failConversion(conversion, Domain::SensorFault::Disconnected); return; }
+            frame.transfer(0x0C); // Atomic LTCBH, LTCBM, LTCBL, fault status read.
+            uint32_t raw = frame.transfer(0);
+            raw = (raw << 8) | frame.transfer(0);
+            raw = (raw << 8) | frame.transfer(0);
+            const uint8_t fault = frame.transfer(0);
+            conversion.reading = decodeRawReading(raw, fault, Domain::SensorRole::Pit, millis());
+        }
+        startConversion(conversion, cs);
+    }
     bool writeRegister(uint8_t cs, uint8_t address, uint8_t value) noexcept {
         Hardware::SharedSpiBus::Frame frame(bus_, cs, 1000000, SPI_MODE1);
         if (!frame) return false;
@@ -71,20 +136,19 @@ private:
         if (!writeRegister(cs, 0x00, 0x00) || // Stop before changing averaging/filter.
             !writeRegister(cs, 0x01, 0x03) ||
             !writeRegister(cs, 0x02, 0x00) || // Unmask faults.
-            !writeRegister(cs, 0x00, 0x90)) return false;
+            !writeRegister(cs, 0x00, 0x10)) return false;
         Hardware::SharedSpiBus::Frame frame(bus_, cs, 1000000, SPI_MODE1);
         if (!frame) return false;
         frame.transfer(0x00);
         const uint8_t cr0 = frame.transfer(0);
         const uint8_t cr1 = frame.transfer(0);
-        return cr0 == 0x90 && cr1 == 0x03;
+        return cr0 == 0x10 && cr1 == 0x03;
     }
 #endif
     Hardware::SharedSpiBus& bus_;
     uint8_t cs_pit_;
     int8_t cs_food1_;
-    uint32_t started_ms_{0};
-    bool pit_ready_{false};
-    bool food_ready_{false};
+    Conversion pit_;
+    Conversion food_;
 };
 }

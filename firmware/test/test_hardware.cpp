@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iostream>
 #include <thread>
+#include "arduino_spies/Max31856Device.hpp"
 #include "../src/Adapters/Actuators/ESP32PWMBlowerAdapter.hpp"
 #include "../src/Adapters/Actuators/ESP32ServoDamperAdapter.hpp"
 #include "../src/Adapters/Sensors/MAX31855SensorAdapter.hpp"
@@ -73,24 +74,42 @@ static void spiFramesAndFaults() {
     assert(Spy::activeCs == -1); // Spies assert lock/transaction/CS at every bus operation.
 }
 static void max56() {
+    Max31856Device device;
     Adapters::Hardware::SharedSpiBus bus; assert(bus.begin());
-    Adapters::Sensors::MAX31856SensorAdapter sensor(bus);
-    Spy::clear(); Spy::now = 0; Spy::response = {0,0,0,0,0,0,0,0,0,0x90,0x03}; sensor.begin();
+    Adapters::Sensors::MAX31856SensorAdapter sensor(bus, 5, 21);
+    Spy::clear(); Spy::now = 0; sensor.begin();
     std::vector<uint32_t> written;
-    for (const auto& e : Spy::events) if (e.operation == "transfer") written.push_back(e.b);
-    assert((written == std::vector<uint32_t>{0x80,0,0x81,3,0x82,0,0x80,0x90,0,0,0}));
+    for (const auto& e : Spy::events) if (e.operation == "transfer" && e.a == 5) written.push_back(e.b);
+    assert((written == std::vector<uint32_t>{0x80,0,0x81,3,0x82,0,0x80,0x10,0,0,0,0x80,0x50}));
     assert(sensor.readTemperature(Domain::SensorRole::Pit).fault == Domain::SensorFault::Stale);
-    Spy::now = 250; Spy::response = {0, 0x06, 0x40, 0, 0}; // 100 C: 12800 << 5
+    Spy::now = 169; sensor.update();
+    assert(sensor.readTemperature(Domain::SensorRole::Pit).fault == Domain::SensorFault::Stale);
+    Spy::now = 170; sensor.update();
     auto reading = sensor.readTemperature(Domain::SensorRole::Pit);
-    assert(reading.celsius == 100 && reading.isValid());
-    Spy::response = {0, 0xFF, 0xD8, 0, 0}; // -2.5 C
+    assert(reading.celsius == 100 && reading.isValid() && reading.timestamp_ms == 170);
+    assert(sensor.readTemperature(Domain::SensorRole::Food1).role == Domain::SensorRole::Food1);
+    assert(sensor.readTemperature(Domain::SensorRole::Food1).isValid());
+    device.pit.rawTemperature = 0xFFD800; // -2.5 C
+    Spy::now = 340; sensor.update();
     reading = sensor.readTemperature(Domain::SensorRole::Pit);
     assert(reading.celsius == -2.5f);
     for (uint8_t fault : {1, 2, 4, 8, 16, 32, 64, 128}) {
-        Spy::response = {0, 0, 0, 0, fault};
+        device.pit.fault = fault;
+        Spy::now += 170; sensor.update();
         assert(!sensor.readTemperature(Domain::SensorRole::Pit).isValid());
     }
-    assert(sensor.readTemperature(Domain::SensorRole::Food1).fault == Domain::SensorFault::Disconnected);
+    assert(sensor.readTemperature(Domain::SensorRole::Food2).fault == Domain::SensorFault::Disconnected);
+    device.pit.fault = 0;
+    Spy::now += 170; sensor.update();
+    assert(sensor.readTemperature(Domain::SensorRole::Pit).isValid());
+    device.pit.stuck = true;
+    Spy::now += 170; sensor.update();
+    assert(sensor.readTemperature(Domain::SensorRole::Pit).isValid());
+    Spy::now += 80; sensor.update();
+    assert(sensor.readTemperature(Domain::SensorRole::Pit).fault == Domain::SensorFault::Stale);
+    assert(sensor.readTemperature(Domain::SensorRole::Food1).isValid());
+    Spy::now += 501; // Even missed upkeep cannot indefinitely preserve healthy data.
+    assert(sensor.readTemperature(Domain::SensorRole::Food1).fault == Domain::SensorFault::Stale);
 }
 static void persistenceAndServiceStartup() {
     Adapters::Storage::ESP32NVSConfigAdapter storage;

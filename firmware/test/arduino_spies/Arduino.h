@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -65,13 +66,16 @@ inline std::vector<Task> tasks;
 struct TaskYield {};
 inline unsigned delaysBeforeYield = 0;
 inline uint32_t lastDelayTicks = 0;
+inline std::function<void()> taskDelayHook;
 }
 inline uint32_t xTaskGetTickCount() { return millis(); }
 inline int xTaskCreatePinnedToCore(void (*entry)(void*), const char*, uint32_t, void* context, int, void*, int core) {
     Spy::event("task", core); Spy::tasks.push_back({entry, context, core}); return pdPASS;
 }
 inline void vTaskDelayUntil(TickType_t*, TickType_t ticks) {
-    Spy::lastDelayTicks = ticks; Spy::now += ticks;
+    Spy::lastDelayTicks = ticks;
+    if (Spy::taskDelayHook) Spy::taskDelayHook();
+    Spy::now += ticks;
     if (Spy::delaysBeforeYield > 0) { --Spy::delaysBeforeYield; return; }
     throw Spy::TaskYield{};
 }

@@ -46,6 +46,11 @@ public:
         sensors.setMode(control.config().meat_probe_mode);
         control.executeCycle(now);
     }
+    void maintainSensor() {
+#ifdef SMOKER_MAX31856
+        wired.update();
+#endif
+    }
     void maintainActuator(uint32_t now) { damper.update(now); }
     void initializeNetwork() {
         display.begin();
@@ -96,12 +101,15 @@ void controlLoopTask(void* context) {
     TickType_t lastWake = xTaskGetTickCount();
     uint32_t lastSample = millis() - 1000U;
     for (;;) {
+        app.maintainSensor();
         const uint32_t now = millis();
         if (now - lastSample >= 1000U) {
             app.controlStep(now);
             lastSample = now;
         }
-        app.maintainActuator(now);
+        // Acquisition and persistence can advance the clock after a new servo
+        // target records its movement time. Never pass that target an older time.
+        app.maintainActuator(millis());
         vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(20));
     }
 }

@@ -25,3 +25,12 @@ PY
     -I"$repo_root/firmware/test/arduino_spies" -I"$repo_root/firmware/src" \
     "$repo_root/firmware/test/test_startup.cpp" -o "$build_dir/startup"
 "$build_dir/startup"
+"${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -pthread -DARDUINO -DSMOKER_MAX31856 \
+    -DSTARTUP_ENTRYPOINT=\""$build_dir/startup_main.cpp"\" \
+    -I"$repo_root/firmware/test/arduino_spies" -I"$repo_root/firmware/src" \
+    "$repo_root/firmware/test/test_startup_max31856.cpp" -o "$build_dir/startup_max31856"
+# Just after a control sample, either side of conversion completion, and just
+# before the next sample: physical conversion latency is observable, not hidden.
+for disconnect_ms in 1001 1079 1080 1081 1169 1170 1171 1999; do
+    "$build_dir/startup_max31856" "$disconnect_ms"
+done
