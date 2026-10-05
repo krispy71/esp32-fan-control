@@ -2,10 +2,15 @@
 import base64
 import http.client
 import json
+import socket
+import shutil
+import os
+from pathlib import Path
 import ssl
 import subprocess
 import sys
 import time
+import threading
 
 import pytest
 
@@ -36,7 +41,7 @@ class RunningController:
         self.service.execute_cycle(0.0)
         self.server = WebServerAdapter(self.channel, port=0, access_dir=access[0])
         self.server.start()
-        self.context = ssl.create_default_context(cafile=str(access[0] / "device-cert.pem"))
+        self.context = ssl.create_default_context(cafile=str(access[0] / "device-ca.pem"))
         self.auth = "Basic " + base64.b64encode(f"admin:{access[1]}".encode()).decode()
         self.origin = f"https://127.0.0.1:{self.server.port}"
 
@@ -74,6 +79,81 @@ def test_unprovisioned_and_untrusted_tls_fail_closed(tmp_path):
     with pytest.raises((ValueError, OSError)):
         server.start()
     assert not server.is_running
+
+
+@pytest.mark.parametrize("invalid_hash", [None, 42, [], {}])
+def test_invalid_private_provisioning_keeps_cli_control_running(tmp_path, access, invalid_hash):
+    directory = tmp_path / "invalid-access"
+    shutil.copytree(access[0], directory)
+    path = directory / "device-access.json"
+    config = json.loads(path.read_text())
+    config["password_sha256"] = invalid_hash
+    path.write_text(json.dumps(config))
+    run = subprocess.run([sys.executable, "-m", "esp32_fan_control.Controller.cli", "--web",
+                          "--access-dir", str(directory), "--cycles", "1", "--config-file", str(tmp_path / "config.json")],
+                         env={**os.environ, "PYTHONPATH": str(Path.cwd() / "src")}, capture_output=True, text=True, timeout=5)
+    assert run.returncode == 0
+    assert "HTTPS disabled" in run.stdout and "Starting control loop" in run.stdout
+
+
+def test_deployed_tls_key_cannot_issue_unrelated_certificates(tmp_path, access):
+    # Demonstrate the compromise boundary using the same OpenSSL verifier as TLS.
+    request = tmp_path / "unrelated.csr"
+    subprocess.run(["openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                    "-nodes", "-subj", "/CN=unrelated.example", "-keyout", str(tmp_path / "key.pem"),
+                    "-out", str(request)], check=True, capture_output=True)
+    issued = tmp_path / "issued.pem"
+    subprocess.run(["openssl", "x509", "-req", "-in", str(request), "-CA", str(access[0] / "device-cert.pem"),
+                    "-CAkey", str(access[0] / "device-key.pem"), "-set_serial", "2", "-days", "1",
+                    "-out", str(issued)], check=True, capture_output=True)
+    chain = tmp_path / "chain.pem"
+    chain.write_bytes((access[0] / "device-cert.pem").read_bytes())
+    verify = subprocess.run(["openssl", "verify", "-CAfile", str(access[0] / "device-ca.pem"),
+                             "-untrusted", str(chain), "-purpose", "sslserver", "-verify_hostname",
+                             "unrelated.example", str(issued)], capture_output=True)
+    assert verify.returncode != 0
+
+
+@pytest.mark.parametrize("phase", ["handshake", "headers", "body"])
+def test_slow_clients_cannot_hold_all_workers_indefinitely(controller, monkeypatch, phase):
+    from esp32_fan_control.Adapters import web_server_adapter
+    monkeypatch.setattr(web_server_adapter, "_MAX_REQUEST_SECONDS", 0.6)
+    clients = []
+    finished = threading.Event()
+    try:
+        for _ in range(4):
+            raw = socket.create_connection(("127.0.0.1", controller.server.port), timeout=1)
+            if phase == "handshake":
+                clients.append(raw)
+                continue
+            client = controller.context.wrap_socket(raw, server_hostname="127.0.0.1")
+            clients.append(client)
+            if phase == "headers":
+                client.sendall(b"GET /api/config HTTP/1.1\r\nX-Slow: ")
+            else:
+                client.sendall((f"POST /api/config HTTP/1.1\r\nHost: 127.0.0.1:{controller.server.port}\r\n"
+                                f"Authorization: {controller.auth}\r\nContent-Type: application/json\r\n"
+                                "Content-Length: 100\r\n\r\n{").encode())
+
+        def dribble():
+            while not finished.wait(0.05):
+                for client in clients:
+                    try:
+                        client.sendall(b" " if phase != "handshake" else b"\x16")
+                    except OSError:
+                        pass
+
+        sender = threading.Thread(target=dribble, daemon=True)
+        sender.start()
+        # Even with ongoing activity, workers must be reclaimed by a fixed bound.
+        time.sleep(0.9)
+        assert controller.request("/api/config")[0] == 200
+    finally:
+        finished.set()
+        for client in clients:
+            client.close()
+        if "sender" in locals():
+            sender.join(timeout=1)
 
 
 def test_auth_required_for_every_route_and_fixed_asset_allowlist(controller):

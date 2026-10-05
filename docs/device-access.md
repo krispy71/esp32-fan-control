@@ -17,21 +17,23 @@ The command creates a private directory with files readable only by their owner:
 
 - `device-access.json`: device SSID, Wi-Fi password, administrator password verifier,
   and allowed hostnames.
-- `device-cert.pem`: the device's self-signed TLS certificate.
+- `device-cert.pem`: the device server certificate, signed by its private device CA.
+- `device-ca.pem`: the public CA certificate to trust on your clients.
+- `operator-ca-key.pem`: the CA signing key; keep it off the device.
 - `device-key.pem`: its private key.
 - `operator-access.txt`: the operator's Wi-Fi and HTTPS credentials.
 
 The provisioning command refuses to overwrite an existing directory and does not
-print credentials. Keep `operator-access.txt` outside the repository and device flash.
-The other three files are also ignored by Git; do not force-add any access files.
+print credentials. Keep `operator-access.txt` and `operator-ca-key.pem` outside the repository and device flash.
+All generated access files are ignored by Git; do not force-add any access files.
 
 Default certificate names cover `192.168.4.1`, `localhost`, and `127.0.0.1`. Use repeated
-`--host` options when provisioning if different names are needed. Import the generated
-certificate into the trust store of each client you control before using the dashboard.
+`--host` options when provisioning if different names are needed. Import `device-ca.pem`
+into the trust store of each client you control before using the dashboard.
 Check its fingerprint locally with:
 
 ```bash
-openssl x509 -in "$HOME/.local/share/esp32-smoker/device-a/device-cert.pem" -noout -fingerprint -sha256
+openssl x509 -in "$HOME/.local/share/esp32-smoker/device-a/device-ca.pem" -noout -fingerprint -sha256
 ```
 
 ## Install on the ESP32
@@ -52,7 +54,7 @@ listed in the private operator file and visit `https://192.168.4.1`. The browser
 for the administrator credentials. No credentials belong in URLs.
 
 To rotate access, provision a new directory, replace all three device files together,
-upload the new filesystem image, and trust the replacement certificate. Retain the
+upload the new filesystem image, and trust the replacement CA certificate. Retain the
 old private directory until the replacement is verified. Existing browser credentials
 may need to be cleared before signing in again.
 

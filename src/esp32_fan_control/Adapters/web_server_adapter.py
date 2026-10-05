@@ -11,6 +11,7 @@ import json
 import math
 from pathlib import Path
 import re
+import socket
 import ssl
 import threading
 from urllib.parse import parse_qs, urlsplit
@@ -20,6 +21,7 @@ from esp32_fan_control.Domain.control import ControlCommand, ControlCommandKind
 from esp32_fan_control.Services.Ports.control_channel_port import ControlChannelPort
 
 _MAX_BODY = 2048
+_MAX_REQUEST_SECONDS = 3.0
 _MODES = list(MeatProbeMode)
 _CONFIG_FIELDS = {
     "setpoint_f", "pid_kp", "pid_ki", "pid_kd", "airflow_threshold_pct",
@@ -84,13 +86,33 @@ class _BoundedHTTPServer(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request, client_address):
+        secure = None
+        deadline = None
         try:
-            request.settimeout(3)
-            secure = self._tls_context.wrap_socket(request, server_side=True)
+            request.settimeout(_MAX_REQUEST_SECONDS)
+            secure = self._tls_context.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
+            # Socket timeouts only bound inactivity. A connection deadline also
+            # releases a slot when a client continually dribbles handshake,
+            # header or body bytes without finishing its request.
+            def expire():
+                try:
+                    secure.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                secure.close()
+
+            deadline = threading.Timer(_MAX_REQUEST_SECONDS, expire)
+            deadline.daemon = True
+            deadline.start()
+            secure.do_handshake()
             super().process_request_thread(secure, client_address)
         except (ssl.SSLError, OSError):
             request.close()
         finally:
+            if deadline is not None:
+                deadline.cancel()
+            if secure is not None:
+                secure.close()
             self._slots.release()
 
     def handle_error(self, request, client_address):
@@ -330,7 +352,8 @@ class WebServerAdapter:
         if len(access_raw) > _MAX_BODY:
             raise ValueError("Invalid access provisioning")
         access = _json_object(access_raw)
-        if (access.get("username") != "admin" or not re.fullmatch(r"[0-9a-f]{64}", access.get("password_sha256", ""))
+        if (access.get("username") != "admin" or not isinstance(access.get("password_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", access["password_sha256"])
                 or not isinstance(access.get("hosts"), list) or not 1 <= len(access["hosts"]) <= 8
                 or any(not isinstance(h, str) or not re.fullmatch(r"[a-zA-Z0-9.-]{1,64}", h) for h in access["hosts"])):
             raise ValueError("Invalid access provisioning")

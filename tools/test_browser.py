@@ -31,7 +31,7 @@ def main():
         access = directory / "access"
         provision(access, ["127.0.0.1", "localhost"])
         password = next(line.split(": ", 1)[1] for line in (access / "operator-access.txt").read_text().splitlines() if line.startswith("HTTPS password:"))
-        context = ssl.create_default_context(cafile=str(access / "device-cert.pem"))
+        context = ssl.create_default_context(cafile=str(access / "device-ca.pem"))
         authorization = "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()
         # Trust exactly this test certificate's key in Chromium, not arbitrary TLS servers.
         public = subprocess.check_output(["openssl", "x509", "-in", str(access / "device-cert.pem"), "-pubkey", "-noout"])

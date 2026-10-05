@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import tempfile
 
 
 def provision(destination: Path, hosts: list[str]) -> None:
@@ -46,17 +47,38 @@ def provision(destination: Path, hosts: list[str]) -> None:
         (destination / "device-access.json").write_text(json.dumps(config), encoding="utf-8")
         subprocess.run([
             "openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-            "-nodes", "-sha256", "-days", "825", "-subj", "/CN=Smoker Controller",
-            "-addext", "subjectAltName=" + ",".join(sans),
-            "-addext", "basicConstraints=critical,CA:TRUE",
-            "-keyout", str(destination / "device-key.pem"),
-            "-out", str(destination / "device-cert.pem"),
+            "-nodes", "-sha256", "-days", "825", "-subj", "/CN=Private Smoker Device CA",
+            "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            "-keyout", str(destination / "operator-ca-key.pem"),
+            "-out", str(destination / "device-ca.pem"),
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Only a leaf key goes onto the device. The CA signing key stays with the
+        # operator and cannot be recovered from a deployed filesystem image.
+        with tempfile.TemporaryDirectory(prefix="issuance-", dir=destination) as temporary:
+            csr = Path(temporary) / "server.csr"
+            extensions = Path(temporary) / "server.ext"
+            extensions.write_text(
+                "basicConstraints=critical,CA:FALSE\n"
+                "keyUsage=critical,digitalSignature\n"
+                "extendedKeyUsage=serverAuth\n"
+                "subjectAltName=" + ",".join(sans) + "\n", encoding="ascii")
+            subprocess.run([
+                "openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                "-nodes", "-sha256", "-subj", "/CN=Smoker Controller",
+                "-keyout", str(destination / "device-key.pem"), "-out", str(csr),
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            subprocess.run([
+                "openssl", "x509", "-req", "-in", str(csr), "-CA", str(destination / "device-ca.pem"),
+                "-CAkey", str(destination / "operator-ca-key.pem"), "-set_serial", str(secrets.randbits(128) or 1),
+                "-days", "825", "-sha256", "-extfile", str(extensions),
+                "-out", str(destination / "device-cert.pem"),
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         (destination / "operator-access.txt").write_text(
             f"Wi-Fi SSID: {config['ap_ssid']}\nWi-Fi password: {ap_password}\n"
             f"HTTPS username: admin\nHTTPS password: {password}\n"
-            "Trust device-cert.pem on your client before opening the dashboard.\n"
-            "Keep this file private. Do not upload it to the device or commit it.\n",
+            "Trust device-ca.pem on your client before opening the dashboard.\n"
+            "Keep this file and operator-ca-key.pem private and off the device. Never commit them.\n",
             encoding="utf-8",
         )
         for item in destination.iterdir():
