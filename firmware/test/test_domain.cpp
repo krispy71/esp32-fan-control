@@ -333,7 +333,7 @@ static int testBLEDecoder() {
 
 static int testBLEProbeAdapter() {
     Adapters::Sensors::BLEProbeAdapter ble(30000);
-    ble.begin();
+    // Radio startup belongs to SharedBleScanner and is tested at that boundary.
 
     // Prior to packet arrival
     TEST_ASSERT(!ble.isConnected(1000), "Should not be connected before any packet");
