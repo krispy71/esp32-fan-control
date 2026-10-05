@@ -42,6 +42,9 @@ and a bounded control-command/state exchange port. No vendor types cross it.
 Repositories: none; existing configuration storage port remains sufficient.
 Adapters: isolated SPI owner; corrected actuators, MAX converters, NVS, bounded control
 exchange; authenticated web boundary with structured parsing and redacted outputs.
+The pinned Arduino BLE discovery implementation receives a build-local ownership
+repair, checked against the vendor source checksum and executable allocation tests.
+No shared SDK files are modified; the application spine remains unchanged.
 Controller: construct application ownership after Arduino initialization; wire ports and
 schedule control/network tasks, without mutable namespace-level service dependencies.
 Client UI: authenticated requests and calibration form in the existing embedded assets.

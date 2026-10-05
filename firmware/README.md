@@ -133,6 +133,15 @@ expose only whether it is configured.
   caches, serves the dashboard, and renders the display. Web requests submit typed
   commands through a bounded queue and read copied state; they never mutate the
   control service directly. Wireless cache exchanges use short locks.
+
+The pinned Arduino 2.0.17 BLE client has service-discovery ownership defects.
+`tools/patch_ble_client.py` uses a [PlatformIO build middleware](https://docs.platformio.org/en/latest/scripting/middlewares.html)
+to compile a repaired copy under `.pio/build/<environment>/patched_ble`:
+duplicate service UUID instances are discarded before allocation, and rediscovery
+clears the secondary service index. The shared framework installation is unchanged.
+An unexpected source checksum stops the build so framework upgrades require an
+explicit patch review. `test/test_ble_sdk_patch.py` executes the emitted vendor
+discovery and cleanup bodies across repeated duplicate-instance discoveries.
 * **Shared SPI**: an explicit bus owner serializes complete display/converter frames,
   including transaction settings and chip-select lifetime. The display uses MOSI23.
 * **Startup**: application ownership is constructed inside `setup()`. The blower is
@@ -273,4 +282,3 @@ Step through each subsystem to confirm physical hardware operation:
 - [ ] Turn on a compatible BLE meat probe (MEATER, Inkbird, or BBQ-BT).
 - [ ] Within 10–30 seconds, confirm the serial log and web dashboard update the meat channel from `N/C` to the live wireless temperature reading with probe name and battery status (e.g. `Meat: 135.2 F [MEATER+ 95%]`).
 - [ ] If a wired thermocouple is also plugged into the Food 1 channel, remove the wireless probe or move it out of range; verify the controller cleanly falls back to the wired probe reading without interrupting the pit regulation loop.
-
