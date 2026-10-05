@@ -142,40 +142,39 @@ Holding a hobby servo at a stationary position under continuous 50Hz PWM pulses 
 The software is structured in accordance with PocketSWE and the [AGENTS.md](../AGENTS.md) contract:
 
 ```text
-src/
-├── Domain/
-│   ├── airflow_demand.py / .hpp          # Typed airflow demand (0-100%) and actuator targets
-│   ├── actuator_coordinator.py / .hpp    # Dual-stage mapping logic (Demand -> Damper % & Fan %)
-│   ├── pid_regulator.py / .hpp           # PID algorithm with anti-windup & derivative filtering
-│   ├── lid_open_detector.py / .hpp       # Temperature drop detection state machine
-│   ├── temperature_reading.py / .hpp     # Measurement entity with timestamp and fault status
-│   └── cook_profile.py / .hpp            # Setpoints, alarms, probe assignments
-│
+firmware/src/
+├── Domain/       # Airflow, PID, temperature, configuration, display values,
+│                 # owned telemetry and typed control commands/state
 ├── Services/
-│   ├── smoker_control_service.py / .hpp  # Orchestrates read -> PID -> coordinate -> actuate cycle
-│   ├── telemetry_service.py / .hpp       # Aggregates system metrics for reporting
-│   └── cook_session_service.py / .hpp    # Manages cook timers, history, and setpoint updates
-│   └── Ports/
-│       ├── damper_actuator_port.py / .hpp # Contract: set_damper_position(pct)
-│       ├── blower_actuator_port.py / .hpp # Contract: set_blower_speed(pct)
-│       ├── temperature_sensor_port.py     # Contract: read_temperature() -> Reading
-│       ├── telemetry_publisher_port.py    # Contract: publish(telemetry)
-│       └── config_storage_port.py         # Contract: load/save settings
-│
+│   ├── SmokerControlService.hpp   # initialize, apply commands, read/control/publish
+│   └── Ports/    # Sensor, damper calibration/position, blower, telemetry,
+│                 # configuration storage and bounded command/state exchange
 ├── Adapters/
-│   ├── Actuators/
-│   │   ├── esp32_servo_damper_adapter.cpp # LEDC / MCPWM 50Hz pulse generation
-│   │   └── esp32_pwm_blower_adapter.cpp   # LEDC MOSFET PWM modulation
-│   ├── Sensors/
-│   │   ├── max31855_thermocouple_adapter.cpp # SPI hardware driver
-│   │   └── meater_ble_probe_adapter.cpp      # ESP32 BLE GATT client for wireless probes
-│   ├── Network/
-│   │   ├── web_server_adapter.cpp         # HTTP REST endpoints & WebSocket broadcaster
-│   │   └── nvs_storage_adapter.cpp        # ESP32 Non-Volatile Storage (NVS) for config
-│
+│   ├── Actuators/  # Independent fan/servo LEDC timers
+│   ├── Hardware/   # Explicit shared SPI owner
+│   ├── Runtime/    # Bounded command queue and copied state with short locks
+│   ├── Sensors/    # MAX31855K/MAX31856, BLE/cloud caches, source selection
+│   ├── Storage/    # Versioned NVS configuration record
+│   ├── Telemetry/  # Serial formatting
+│   ├── Display/    # E-ink driver using the shared bus
+│   └── Network/    # Provisioned authenticated HTTPS and static asset allowlist
 └── Controller/
-    └── main.cpp                          # FreeRTOS setup, task pinouts, dependency wiring
+    └── main.cpp    # Ownership, startup, task contexts and scheduling
 ```
+
+The Python simulator under `src/esp32_fan_control` mirrors the core Domain/Services
+contracts and supplies filesystem, simulated-sensor, console-actuator, bounded-channel,
+and HTTPS adapters. Firmware dashboard assets live in `firmware/data` and use the
+[approved embedded UI exception](ui-architecture.md).
+
+The control task exclusively owns mutable service and actuator state. Web handlers
+submit typed commands and consume owned snapshots through `IControlChannel`. A
+configuration version prevents stale overwrites; command acknowledgments distinguish
+application from persistence. Network tasks never call mutable service methods.
+
+Configuration loads explicitly after Arduino startup. NVS stores one versioned record,
+including servo calibration. Domain telemetry owns its strings; Domain has no Ports
+imports. Concrete FreeRTOS locks and SPI transactions remain in Adapters.
 
 ### 3.1 Inward Dependency Rules
 - **Domain**: Pure business and control math. Contains no hardware timers, no ESP-IDF/Arduino includes, and no network logic. 100% testable on host/desktop environments.
