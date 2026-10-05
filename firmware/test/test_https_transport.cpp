@@ -63,6 +63,19 @@ int main() {
         close_session(handle,20);
         assert(WebSpy::close_count(20)==1);
 
+        // A recycled slot must relinquish its previous established ownership
+        // before any allocation or handshake failure on the next connection.
+        WebSpy::now_us=0;
+        WebSpy::fail_tls_init=true;
+        assert(open_session(handle,24)==ESP_FAIL); WebSpy::fail_tls_init=false;
+        assert(WebSpy::close_count(24)==1 && WebSpy::tls_live==0);
+        WebSpy::fail_handshake=true;
+        assert(open_session(handle,25)==ESP_FAIL); WebSpy::fail_handshake=false;
+        assert(WebSpy::close_count(25)==1 && WebSpy::tls_live==0);
+        assert(open_session(handle,26)==ESP_OK);
+        close_session(handle,26);
+        assert(WebSpy::close_count(26)==1 && WebSpy::tls_live==0);
+
         WebSpy::now_us=0;
         assert(open_session(handle,21)==ESP_OK);
         WebSpy::read_hook=[](int fd) {
