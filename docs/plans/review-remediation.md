@@ -118,4 +118,8 @@ Evidence: exact commands/results and acceptance matrix in the completion report.
 
 ## Status
 
-Planning complete. Implementation and verification in progress.
+Software implementation complete. Independent integration review: PASS, no remaining
+findings. All executable software acceptance scenarios pass, including both ESP32
+builds and the real simulator/browser flow. Physical Gates 1–5 remain bench work;
+full-project verification is PARTIALLY VERIFIED. See the
+[completion and verification report](../review-verification.md).

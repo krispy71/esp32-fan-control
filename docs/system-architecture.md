@@ -176,6 +176,11 @@ Configuration loads explicitly after Arduino startup. NVS stores one versioned r
 including servo calibration. Domain telemetry owns its strings; Domain has no Ports
 imports. Concrete FreeRTOS locks and SPI transactions remain in Adapters.
 
+One shared BLE scanner owns radio discovery and keeps only the configured direct
+probe candidate. The HTTPS adapter owns two connection slots and an absolute
+connection deadline covering TLS negotiation, request reads, and response writes.
+These resource limits do not depend on the control task or on incoming traffic rates.
+
 ### 3.1 Inward Dependency Rules
 - **Domain**: Pure business and control math. Contains no hardware timers, no ESP-IDF/Arduino includes, and no network logic. 100% testable on host/desktop environments.
 - **Services**: Coordinate the domain models using Ports. Knows nothing about MOSFETs or servos—only `DamperActuatorPort` and `BlowerActuatorPort`.

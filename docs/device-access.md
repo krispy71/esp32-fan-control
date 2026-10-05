@@ -75,7 +75,11 @@ operator file. The simulator defaults to a local loopback address.
 Control requests are authenticated and validated before entering the bounded control
 queue. Acceptance into that queue is distinct from application by the control loop;
 the API exposes the applied command and persistence result. Stale configuration
-versions are rejected rather than silently overwriting a newer change.
+versions are rejected rather than silently overwriting a newer change, including after
+a reboot. The controller reserves revision numbers in storage at startup. If that
+reservation fails, configuration edits are rejected and reported as a storage error;
+autonomous control continues. An ordinary settings-save failure is still reported
+as applied but not saved.
 
 MEATER tokens are write-only. Reading configuration reports whether a token is
 configured, never its value. Leaving the token field unchanged preserves it. The
