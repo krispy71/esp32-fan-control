@@ -2,6 +2,7 @@
 
 #include "../../Services/Ports/TemperatureSensorPort.hpp"
 #include <cstdint>
+#include "../Hardware/SharedSpiBus.hpp"
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -12,38 +13,30 @@ namespace SmokerController::Adapters::Sensors {
 
 class MAX31855SensorAdapter : public Services::Ports::ITemperatureSensorPort {
 public:
-    MAX31855SensorAdapter(
-        uint8_t cs_pit_pin = 5,
-        uint8_t cs_food1_pin = 21,
-        uint8_t sck_pin = 18,
-        uint8_t miso_pin = 19
-    ) noexcept
-        : cs_pit_(cs_pit_pin),
-          cs_food1_(cs_food1_pin),
-          sck_(sck_pin),
-          miso_(miso_pin) {}
+    explicit MAX31855SensorAdapter(Hardware::SharedSpiBus& bus,
+                                   uint8_t cs_pit_pin = 5, int8_t cs_food1_pin = -1) noexcept
+        : bus_(bus), cs_pit_(cs_pit_pin), cs_food1_(cs_food1_pin) {}
 
     void begin() noexcept {
 #ifdef ARDUINO
         pinMode(cs_pit_, OUTPUT);
         digitalWrite(cs_pit_, HIGH);
-
-        pinMode(cs_food1_, OUTPUT);
-        digitalWrite(cs_food1_, HIGH);
-
-        SPI.begin(sck_, miso_, -1, cs_pit_);
+        if (cs_food1_ >= 0) {
+            pinMode(cs_food1_, OUTPUT);
+            digitalWrite(cs_food1_, HIGH);
+        }
 #endif
     }
 
     Domain::TemperatureReading readTemperature(Domain::SensorRole role) noexcept override {
-        uint8_t cs_pin = (role == Domain::SensorRole::Pit) ? cs_pit_ : cs_food1_;
         uint32_t now_ms = 0;
 #ifdef ARDUINO
         now_ms = millis();
 #endif
-
-        uint32_t raw_data = readRaw32(cs_pin);
-        return decodeRawReading(raw_data, role, now_ms);
+        if (role != Domain::SensorRole::Pit && (role != Domain::SensorRole::Food1 || cs_food1_ < 0))
+            return Domain::TemperatureReading{0.0f, role, now_ms, Domain::SensorFault::Disconnected};
+        const uint8_t cs = role == Domain::SensorRole::Pit ? cs_pit_ : static_cast<uint8_t>(cs_food1_);
+        return decodeRawReading(readRaw32(cs), role, now_ms);
     }
 
     static Domain::TemperatureReading decodeRawReading(
@@ -79,26 +72,21 @@ public:
 private:
     uint32_t readRaw32(uint8_t cs_pin) noexcept {
 #ifdef ARDUINO
-        digitalWrite(cs_pin, LOW);
+        Hardware::SharedSpiBus::Frame frame(bus_, cs_pin, 4000000, SPI_MODE0);
+        if (!frame) return 0x00010001; // unavailable bus fails closed
         delayMicroseconds(1);
-
-        uint32_t b0 = SPI.transfer(0x00);
-        uint32_t b1 = SPI.transfer(0x00);
-        uint32_t b2 = SPI.transfer(0x00);
-        uint32_t b3 = SPI.transfer(0x00);
-
-        digitalWrite(cs_pin, HIGH);
-        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+        uint32_t raw = 0;
+        for (uint8_t i = 0; i < 4; ++i) raw = (raw << 8) | frame.transfer(0);
+        return raw;
 #else
         (void)cs_pin;
         return 0;
 #endif
     }
 
+    Hardware::SharedSpiBus& bus_;
     uint8_t cs_pit_;
-    uint8_t cs_food1_;
-    uint8_t sck_;
-    uint8_t miso_;
+    int8_t cs_food1_;
 };
 
 } // namespace SmokerController::Adapters::Sensors

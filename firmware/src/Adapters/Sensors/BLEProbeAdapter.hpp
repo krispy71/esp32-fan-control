@@ -4,6 +4,8 @@
 #include "../../Domain/BLEDecoder.hpp"
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include "../Runtime/SnapshotMutex.hpp"
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -29,6 +31,7 @@ public:
     }
 
     void setTargetMac(const char* mac) noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         if (mac) {
             std::strncpy(target_mac_, mac, sizeof(target_mac_) - 1);
             target_mac_[sizeof(target_mac_) - 1] = '\0';
@@ -37,9 +40,14 @@ public:
         }
     }
 
-    [[nodiscard]] const char* targetMac() const noexcept { return target_mac_; }
-    [[nodiscard]] const Domain::BLEProbeReading& lastReading() const noexcept { return last_reading_; }
+    [[nodiscard]] std::string targetMac() const {
+        char copy[sizeof(target_mac_)];
+        { Runtime::SnapshotLock lock(mutex_); std::memcpy(copy, target_mac_, sizeof(copy)); }
+        return copy;
+    }
+    [[nodiscard]] Domain::BLEProbeReading lastReading() const noexcept { Runtime::SnapshotLock lock(mutex_); return last_reading_; }
     [[nodiscard]] bool isConnected(uint32_t now_ms) const noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         return has_received_packet_ && ((now_ms - last_packet_time_ms_) <= staleness_timeout_ms_);
     }
 
@@ -65,9 +73,9 @@ public:
     bool processAdvertisement(const uint8_t* payload, size_t length, const char* mac, uint32_t now_ms) noexcept {
         if (!payload || length == 0) return false;
 
-        // If target MAC is configured, filter out other devices
-        if (target_mac_[0] != '\0' && mac) {
-            if (std::strcmp(target_mac_, mac) != 0) {
+        const auto target = targetMac();
+        if (!target.empty()) {
+            if (!mac || target != mac) {
                 return false;
             }
         }
@@ -77,6 +85,7 @@ public:
             if (mac) {
                 std::strncpy(reading.mac_address, mac, sizeof(reading.mac_address) - 1);
             }
+            Runtime::SnapshotLock lock(mutex_);
             last_reading_ = reading;
             last_packet_time_ms_ = now_ms;
             has_received_packet_ = true;
@@ -88,14 +97,14 @@ public:
 #ifdef ARDUINO
     void onResult(BLEAdvertisedDevice advertisedDevice) override {
         uint32_t now = millis();
-        const char* mac = advertisedDevice.getAddress().toString().c_str();
+        const std::string mac = advertisedDevice.getAddress().toString();
 
         if (advertisedDevice.haveServiceData()) {
             std::string serviceData = advertisedDevice.getServiceData();
             if (processAdvertisement(
                 reinterpret_cast<const uint8_t*>(serviceData.data()),
                 serviceData.length(),
-                mac,
+                mac.c_str(),
                 now
             )) {
                 return;
@@ -107,7 +116,7 @@ public:
             processAdvertisement(
                 reinterpret_cast<const uint8_t*>(mfgData.data()),
                 mfgData.length(),
-                mac,
+                mac.c_str(),
                 now
             );
         }
@@ -115,10 +124,12 @@ public:
 #endif
 
     void setMockTime(uint32_t now_ms) noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         mock_time_ms_ = now_ms;
     }
 
     Domain::TemperatureReading readTemperature(Domain::SensorRole role) noexcept override {
+        Runtime::SnapshotLock lock(mutex_);
         uint32_t now = 0;
 #ifdef ARDUINO
         now = millis();
@@ -126,7 +137,7 @@ public:
         now = (mock_time_ms_ > 0) ? mock_time_ms_ : last_packet_time_ms_;
 #endif
 
-        if (!isConnected(now)) {
+        if (!(has_received_packet_ && ((now - last_packet_time_ms_) <= staleness_timeout_ms_))) {
             Domain::TemperatureReading r{
                 0.0f,
                 role,
@@ -175,6 +186,7 @@ public:
     }
 
 private:
+    mutable Runtime::SnapshotMutex mutex_;
     uint32_t staleness_timeout_ms_;
     uint32_t last_packet_time_ms_;
     uint32_t mock_time_ms_{0};

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include "../Hardware/SharedSpiBus.hpp"
 #include "../../Domain/DisplayView.hpp"
 #include "../../Services/Ports/DisplayPort.hpp"
 #include "../../Services/Ports/TelemetryPort.hpp"
@@ -135,20 +136,17 @@ public:
     static constexpr uint8_t COLOR_WHITE = 1;
 
     InlandEInkAdapter(
+        Hardware::SharedSpiBus& bus,
         uint8_t cs_pin = 4,
         uint8_t dc_pin = 22,
         uint8_t rst_pin = 16,
         uint8_t busy_pin = 17,
-        uint8_t sck_pin = 18,
-        uint8_t mosi_pin = 23,
         EInkModel model = EInkModel::Inland_2_13_Inch
     ) noexcept
-        : cs_pin_(cs_pin),
+        : bus_(bus), cs_pin_(cs_pin),
           dc_pin_(dc_pin),
           rst_pin_(rst_pin),
           busy_pin_(busy_pin),
-          sck_pin_(sck_pin),
-          mosi_pin_(mosi_pin),
           model_(model),
           width_(model == EInkModel::Inland_2_13_Inch ? 250 : 200),
           height_(model == EInkModel::Inland_2_13_Inch ? 122 : 200),
@@ -159,11 +157,20 @@ public:
         std::memset(buffer_, 0xFF, buffer_size_); // Default all white
     }
 
+    InlandEInkAdapter(const InlandEInkAdapter&) = delete;
+    InlandEInkAdapter& operator=(const InlandEInkAdapter&) = delete;
+
     ~InlandEInkAdapter() override {
         delete[] buffer_;
     }
 
     void begin() noexcept override {
+        wake();
+        is_initialized_ = true;
+        clearBuffer(COLOR_WHITE);
+    }
+
+    void wake() noexcept {
 #ifdef ARDUINO
         pinMode(cs_pin_, OUTPUT);
         pinMode(dc_pin_, OUTPUT);
@@ -195,8 +202,7 @@ public:
 
         setRamWindow(0, width_ - 1, 0, height_ - 1);
 #endif
-        is_initialized_ = true;
-        clearBuffer(COLOR_WHITE);
+        sleeping_ = false;
     }
 
     void clear() noexcept override {
@@ -209,6 +215,7 @@ public:
         sendCommand(0x10); // Deep sleep mode
         sendData(0x01);
 #endif
+        sleeping_ = true;
     }
 
     [[nodiscard]] bool isBusy() const noexcept override {
@@ -512,19 +519,18 @@ private:
 
     void pushBuffer(bool full_refresh) noexcept {
 #ifdef ARDUINO
+        if (sleeping_) wake();
         setRamWindow(0, width_ - 1, 0, height_ - 1);
         setRamAddress(0, 0);
 
         // Write Black/White RAM (0x24)
         sendCommand(0x24);
-        SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
         digitalWrite(dc_pin_, HIGH);
-        digitalWrite(cs_pin_, LOW);
-        for (uint32_t i = 0; i < buffer_size_; ++i) {
-            SPI.transfer(buffer_[i]);
+        {
+            Hardware::SharedSpiBus::Frame frame(bus_, cs_pin_, 4000000, SPI_MODE0);
+            if (!frame) return;
+            for (uint32_t i = 0; i < buffer_size_; ++i) frame.transfer(buffer_[i]);
         }
-        digitalWrite(cs_pin_, HIGH);
-        SPI.endTransaction();
 
         // Display Update sequence
         sendCommand(0x22);
@@ -534,26 +540,22 @@ private:
         waitBusy(2500);
 
         sleep();
+#else
+        (void)full_refresh;
 #endif
     }
 
 #ifdef ARDUINO
     void sendCommand(uint8_t cmd) noexcept {
         digitalWrite(dc_pin_, LOW); // Command
-        digitalWrite(cs_pin_, LOW);
-        SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-        SPI.transfer(cmd);
-        SPI.endTransaction();
-        digitalWrite(cs_pin_, HIGH);
+        Hardware::SharedSpiBus::Frame frame(bus_, cs_pin_, 4000000, SPI_MODE0);
+        frame.transfer(cmd);
     }
 
     void sendData(uint8_t data) noexcept {
         digitalWrite(dc_pin_, HIGH); // Data
-        digitalWrite(cs_pin_, LOW);
-        SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-        SPI.transfer(data);
-        SPI.endTransaction();
-        digitalWrite(cs_pin_, HIGH);
+        Hardware::SharedSpiBus::Frame frame(bus_, cs_pin_, 4000000, SPI_MODE0);
+        frame.transfer(data);
     }
 
     void setRamWindow(uint16_t x_start, uint16_t x_end, uint16_t y_start, uint16_t y_end) noexcept {
@@ -586,12 +588,11 @@ private:
     }
 #endif
 
+    Hardware::SharedSpiBus& bus_;
     uint8_t cs_pin_;
     uint8_t dc_pin_;
     uint8_t rst_pin_;
     uint8_t busy_pin_;
-    uint8_t sck_pin_;
-    uint8_t mosi_pin_;
     EInkModel model_;
     int16_t width_;
     int16_t height_;
@@ -599,6 +600,7 @@ private:
     uint32_t buffer_size_;
     uint8_t* buffer_{nullptr};
 
+    bool sleeping_{false};
     bool is_initialized_{false};
     uint32_t last_refresh_ms_{0};
     uint32_t refresh_count_{0};

@@ -4,6 +4,8 @@
 #include "../../Domain/BLEDecoder.hpp"
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include "../Runtime/SnapshotMutex.hpp"
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -37,6 +39,7 @@ public:
     }
 
     void setTargetMac(const char* mac) noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         if (mac) {
             std::strncpy(target_mac_, mac, sizeof(target_mac_) - 1);
             target_mac_[sizeof(target_mac_) - 1] = '\0';
@@ -45,8 +48,13 @@ public:
         }
     }
 
-    [[nodiscard]] const char* targetMac() const noexcept { return target_mac_; }
+    [[nodiscard]] std::string targetMac() const {
+        char copy[sizeof(target_mac_)];
+        { Runtime::SnapshotLock lock(mutex_); std::memcpy(copy, target_mac_, sizeof(copy)); }
+        return copy;
+    }
     [[nodiscard]] bool isConnected(uint32_t now_ms) const noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         return has_received_packet_ && ((now_ms - last_packet_time_ms_) <= staleness_timeout_ms_);
     }
 
@@ -65,7 +73,12 @@ public:
     void update(uint32_t now_ms) noexcept {
         (void)now_ms;
 #ifdef ARDUINO
-        if (!is_enabled_) return;
+        if (!is_enabled_) {
+            if (client_ && client_->isConnected()) client_->disconnect();
+            is_connected_ = false;
+            return;
+        }
+        if (client_ && !client_->isConnected()) is_connected_ = false;
         // Periodic check: if not connected and backoff expired (every 15s), attempt scan/connect
         if (!is_connected_ && (now_ms - last_reconnect_attempt_ms_ > 15000)) {
             last_reconnect_attempt_ms_ = now_ms;
@@ -76,8 +89,9 @@ public:
                 for (int i = 0; i < foundDevices.getCount(); i++) {
                     BLEAdvertisedDevice device = foundDevices.getDevice(i);
                     bool match = false;
-                    if (target_mac_[0] != '\0') {
-                        if (device.getAddress().toString() == target_mac_) match = true;
+                    const auto target = targetMac();
+                    if (!target.empty()) {
+                        if (device.getAddress().toString() == target) match = true;
                     } else if (device.haveName() && device.getName().rfind("MEATER", 0) == 0) {
                         match = true;
                     }
@@ -95,6 +109,7 @@ public:
         if (!payload || length < 2) return false;
         Domain::BLEProbeReading r{};
         if (Domain::BLEAdvertisementDecoder::decodeMeaterGatt(payload, length, r)) {
+            Runtime::SnapshotLock lock(mutex_);
             last_reading_ = r;
             last_packet_time_ms_ = now_ms;
             has_received_packet_ = true;
@@ -104,10 +119,12 @@ public:
     }
 
     void setMockTime(uint32_t now_ms) noexcept {
+        Runtime::SnapshotLock lock(mutex_);
         mock_time_ms_ = now_ms;
     }
 
     Domain::TemperatureReading readTemperature(Domain::SensorRole role) noexcept override {
+        Runtime::SnapshotLock lock(mutex_);
         uint32_t now = 0;
 #ifdef ARDUINO
         now = millis();
@@ -115,7 +132,7 @@ public:
         now = (mock_time_ms_ > 0) ? mock_time_ms_ : last_packet_time_ms_;
 #endif
 
-        if (!isConnected(now)) {
+        if (!(has_received_packet_ && ((now - last_packet_time_ms_) <= staleness_timeout_ms_))) {
             Domain::TemperatureReading r{
                 0.0f,
                 role,
@@ -166,23 +183,21 @@ public:
 #ifdef ARDUINO
 private:
     void connectToDevice(BLEAdvertisedDevice& device) {
-        BLEClient* pClient = BLEDevice::createClient();
+        if (!client_) client_ = BLEDevice::createClient();
+        BLEClient* pClient = client_;
         if (!pClient->connect(&device)) {
-            delete pClient;
             return;
         }
 
         BLERemoteService* pRemoteService = pClient->getService(BLEUUID("a75cc7fc-c956-488f-ac2a-2dbc08b63a04"));
         if (!pRemoteService) {
             pClient->disconnect();
-            delete pClient;
             return;
         }
 
         BLERemoteCharacteristic* pRemoteChar = pRemoteService->getCharacteristic(BLEUUID("7edda774-045e-4bbf-909b-45d1991a2876"));
         if (!pRemoteChar) {
             pClient->disconnect();
-            delete pClient;
             return;
         }
 
@@ -193,16 +208,20 @@ private:
         }
 
         if (pRemoteChar->canNotify()) {
-            pRemoteChar->registerForNotify([](BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+            pRemoteChar->registerForNotify([this](BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
                 (void)pBLERemoteCharacteristic;
                 (void)isNotify;
-                // Static dispatch handled via instance
+                processGattPayload(pData, length, millis());
             });
         }
     }
 #endif
 
 private:
+#ifdef ARDUINO
+    BLEClient* client_{nullptr}; // Arduino BLE owns its client registry for device lifetime.
+#endif
+    mutable Runtime::SnapshotMutex mutex_;
     uint32_t staleness_timeout_ms_;
     uint32_t last_packet_time_ms_;
     uint32_t last_reconnect_attempt_ms_;
