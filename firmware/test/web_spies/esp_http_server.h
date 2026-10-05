@@ -1,4 +1,5 @@
 #pragma once
+#include "lwip/sockets.h"
 #include <algorithm>
 #include <cstring>
 #include <map>
@@ -59,11 +60,12 @@ inline void httpd_sess_set_transport_ctx(httpd_handle_t handle,int fd,void* cont
 inline int httpd_sess_set_recv_override(httpd_handle_t handle,int fd,httpd_recv_func_t callback) { static_cast<ServerSpy*>(handle)->sessions.at(fd).recv=callback; return ESP_OK; }
 inline int httpd_sess_set_send_override(httpd_handle_t handle,int fd,httpd_send_func_t callback) { static_cast<ServerSpy*>(handle)->sessions.at(fd).send=callback; return ESP_OK; }
 inline int httpd_sess_set_pending_override(httpd_handle_t handle,int fd,httpd_pending_func_t callback) { static_cast<ServerSpy*>(handle)->sessions.at(fd).pending=callback; return ESP_OK; }
-// IDF 4.4.7 httpd_sess_new: a failed open hook is followed by close_fn.
+// IDF 4.4.7: httpd_sess_new calls close_fn after a failed open hook;
+// httpd_accept_conn then closes the still caller-owned socket.
 inline int open_session(httpd_handle_t handle,int fd) {
     auto* server=static_cast<ServerSpy*>(handle); server->sessions.emplace(fd,SessionSpy{});
     int result=server->config.open_fn(handle,fd);
-    if(result!=ESP_OK) { server->config.close_fn(handle,fd); server->sessions.erase(fd); }
+    if(result!=ESP_OK) { server->config.close_fn(handle,fd); server->sessions.erase(fd); lwip_close(fd); }
     return result;
 }
 inline void close_session(httpd_handle_t handle,int fd) {

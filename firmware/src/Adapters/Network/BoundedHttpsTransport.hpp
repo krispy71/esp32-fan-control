@@ -75,7 +75,7 @@ public:
     httpd_handle_t server() const { return server_; }
 
 private:
-    struct Session { int fd{-1}; int64_t deadline{0}; esp_tls_t* tls{nullptr}; };
+    struct Session { int fd{-1}; int64_t deadline{0}; esp_tls_t* tls{nullptr}; bool established{false}; };
     static constexpr int64_t lifetime_us = 3000000;
     std::array<Session, 2> sessions_{};
     std::mutex mutex_;
@@ -98,6 +98,7 @@ private:
             std::lock_guard<std::mutex> lock(self.mutex_);
             for (auto& item : self.sessions_) if (item.fd < 0) {
                 item.fd = fd;
+                item.established = false;
                 item.deadline = esp_timer_get_time() + lifetime_us;
                 selected = &item;
                 break;
@@ -113,11 +114,13 @@ private:
         if (httpd_sess_set_recv_override(server, fd, receive) != ESP_OK
             || httpd_sess_set_send_override(server, fd, send) != ESP_OK
             || httpd_sess_set_pending_override(server, fd, pending) != ESP_OK) return ESP_FAIL;
+        selected->established = true;
         return ESP_OK;
     }
     static void close(httpd_handle_t server, int fd) {
         auto& self = owner(server);
         Session* current = session(server, fd);
+        const bool owns_socket = current && current->established;
         if (current) {
             // Serialize invalidation with shutdown. The watchdog never retains
             // an fd outside this lock, so it cannot act on a reused descriptor.
@@ -128,9 +131,9 @@ private:
             if (current->tls) { esp_tls_server_session_delete(current->tls); current->tls = nullptr; }
             httpd_sess_set_transport_ctx(server, fd, nullptr, nullptr);
         }
-        // IDF 4.4 ESP-TLS frees the TLS context, while HTTPD's close hook owns
-        // the accepted socket (the default close is skipped when a hook exists).
-        lwip_close(fd);
+        // IDF 4.4's accept caller closes the socket after a failed open hook.
+        // Established sessions delegate their sole socket close to this hook.
+        if (owns_socket) lwip_close(fd);
     }
     static int receive(httpd_handle_t server, int fd, char* data, size_t size, int) {
         auto* current = session(server, fd);

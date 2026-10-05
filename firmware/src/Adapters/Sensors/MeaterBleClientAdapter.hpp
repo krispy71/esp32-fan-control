@@ -215,6 +215,10 @@ private:
             return;
         }
 
+        // Arduino preserves service/characteristic handles across reconnects.
+        // Discover this peer before selecting any cached service or handle.
+        pClient->getServices();
+
         BLERemoteService* pRemoteService = pClient->getService(BLEUUID("a75cc7fc-c956-488f-ac2a-2dbc08b63a04"));
         if (!pRemoteService) {
             pClient->disconnect();

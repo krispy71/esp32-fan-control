@@ -1,6 +1,7 @@
 #pragma once
 #include "Arduino.h"
 #include <functional>
+#include <set>
 using esp_ble_addr_type_t=uint8_t;
 class BLEUUID { public: explicit BLEUUID(const char*) {} };
 class BLEAddress {
@@ -59,13 +60,17 @@ public:
     std::string connected_mac;
     uint8_t connected_address_type=0;
     unsigned attempts=0;
+    unsigned discoveries=0;
+    bool services_known=false, cached_service_available=false;
+    std::set<std::string> missing_service_macs;
     bool connect(BLEAddress address,esp_ble_addr_type_t address_type) {
         ++attempts; connected_mac=address.toString(); connected_address_type=address_type;
         connected=allow_connection; return connected;
     }
     bool isConnected() { return connected; }
     void disconnect() { connected=false; }
-    BLERemoteService* getService(BLEUUID) { static BLERemoteService service; return connected ? &service : nullptr; }
+    void getServices() { ++discoveries; services_known=true; cached_service_available=connected && !missing_service_macs.count(connected_mac); }
+    BLERemoteService* getService(BLEUUID) { if(!services_known) getServices(); static BLERemoteService service; return cached_service_available ? &service : nullptr; }
 };
 class BLEDevice {
 public:
