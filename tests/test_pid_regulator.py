@@ -56,3 +56,10 @@ def test_pid_does_not_integrate_further_into_output_saturation() -> None:
     pid.compute(200, 0)
     assert pid.compute(200, 1).value_pct == 100
     assert pid.integral == 0
+
+
+def test_integral_driven_saturation_still_commands_the_output_limit() -> None:
+    pid = PIDRegulator(225, PIDConfig(kp=0, ki=10, kd=0))
+    pid.compute(200, 0)
+    assert pid.compute(200, 1).value_pct == 100
+    assert pid.integral == 0

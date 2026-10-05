@@ -88,7 +88,6 @@ public:
               (total < config_.output_min && error < 0.0f))) {
             integral_ = candidate_integral;
         }
-        total = p_term + config_.ki * integral_ + d_term;
         float output = std::clamp(total, config_.output_min, config_.output_max);
 
         last_error_ = error;

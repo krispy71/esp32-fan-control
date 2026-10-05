@@ -218,6 +218,11 @@ static void suppressionRecovery() {
     Domain::PIDRegulator limited(225, saturated);
     limited.compute(200, 0); limited.compute(200, 1000);
     assert(limited.integral() == 0);
+    saturated.kp = 0; saturated.ki = 10;
+    Domain::PIDRegulator integral_only(225, saturated);
+    integral_only.compute(200, 0);
+    assert(integral_only.compute(200, 1000).value_pct == 100);
+    assert(integral_only.integral() == 0);
 }
 
 static void commandBoundaryAndOwnership() {

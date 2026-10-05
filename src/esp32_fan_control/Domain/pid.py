@@ -107,7 +107,6 @@ class PIDRegulator:
         if not ((total > self._config.output_max and error > 0.0)
                 or (total < self._config.output_min and error < 0.0)):
             self._integral = candidate_integral
-        total = p_term + self._config.ki * self._integral + d_term
         clamped = max(self._config.output_min, min(self._config.output_max, total))
 
         # Update historical state
