@@ -13,12 +13,20 @@ int main() {
     assert(Spy::tasks[0].context == Spy::tasks[1].context && Spy::tasks[0].context != nullptr);
     assert(Spy::duty.at(0) == 0 && Spy::duty.at(2) == 2200ULL * 65535 / 20000);
     size_t nvs=0, pwm=0, task=0;
+    bool first_servo_pulse = true;
     for (size_t i=0;i<Spy::events.size();++i) {
         if (Spy::events[i].operation == "nvsBegin") nvs=i;
-        if (Spy::events[i].operation == "pwm" && Spy::events[i].a == 2) pwm=i;
+        if (Spy::events[i].operation == "pwm" && Spy::events[i].a == 2) {
+            if (first_servo_pulse) {
+                assert(Spy::events[i].b == 2200ULL * 65535 / 20000);
+                pwm = i;
+                first_servo_pulse = false;
+            }
+        }
         if (Spy::events[i].operation == "task" && Spy::events[i].a == 1) task=i;
     }
     assert(nvs < pwm && pwm < task);
+    assert(Spy::count("pwm", 2) == 1); // No default pulse may precede calibrated closure.
     try { Spy::tasks[0].entry(Spy::tasks[0].context); } catch (const Spy::TaskYield&) {}
     assert(Spy::duty.at(0) == 0); // First conversion is not ready at task launch.
     Spy::now = 200;
