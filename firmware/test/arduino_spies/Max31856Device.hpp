@@ -15,6 +15,8 @@ public:
         bool stuck{false};
         uint32_t conversionStarted{0};
         std::optional<uint32_t> disconnectedAt;
+        std::optional<uint8_t> cr0Readback;
+        std::optional<uint8_t> cr1Readback;
         std::vector<uint32_t> completedAt;
     };
     Chip pit;
@@ -27,6 +29,7 @@ public:
 private:
     uint8_t transfer(int cs, uint8_t value) {
         assert(cs == 5 || cs == 21);
+        assert(Spy::transactionMode == SPI_MODE1 && Spy::transactionHz == 1000000);
         Chip& chip = cs == 5 ? pit : food;
         if ((chip.registers[0] & 0x40) && !chip.stuck &&
                 millis() - chip.conversionStarted >= 170) {
@@ -48,7 +51,11 @@ private:
         }
         assert(address_ < chip.registers.size());
         const uint8_t address = address_++;
-        if (!write_) return chip.registers[address];
+        if (!write_) {
+            if (address == 0 && chip.cr0Readback) return *chip.cr0Readback;
+            if (address == 1 && chip.cr1Readback) return *chip.cr1Readback;
+            return chip.registers[address];
+        }
         chip.registers[address] = value;
         if (address == 0 && (value & 0x40)) chip.conversionStarted = millis();
         return 0;

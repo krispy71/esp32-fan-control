@@ -79,7 +79,8 @@ private:
         if (conversion.configured) startConversion(conversion, cs);
     }
     void failConversion(Conversion& conversion, Domain::SensorFault fault) noexcept {
-        conversion.reading = {0.0f, Domain::SensorRole::Pit, millis(), fault};
+        conversion.reading = Domain::TemperatureReading{0.0f, Domain::SensorRole::Pit,
+                                                       static_cast<uint32_t>(millis()), fault};
         conversion.pending = false;
     }
     void startConversion(Conversion& conversion, uint8_t cs) noexcept {

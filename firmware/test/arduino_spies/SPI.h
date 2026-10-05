@@ -12,6 +12,8 @@ namespace Spy {
 inline std::deque<uint8_t> response;
 inline bool yieldTransfer = false;
 inline uint32_t transferDelayMs = 0;
+inline int transactionMode = -1;
+inline uint32_t transactionHz = 0;
 inline std::function<void()> transactionHook;
 inline std::function<uint8_t(int, uint8_t)> transferHook;
 }
@@ -19,7 +21,7 @@ class SPIClass {
 public:
     explicit SPIClass(int) {}
     void begin(int sck, int miso, int mosi, int) { assert(sck == 18 && miso == 19 && mosi == 23); Spy::event("spiBegin", sck, mosi); }
-    void beginTransaction(SPISettings settings) { assert(Spy::busLocked && Spy::activeCs == -1); assert(settings.order == MSBFIRST); Spy::transaction = true; Spy::event("transaction", settings.mode, settings.hz); if (Spy::transactionHook) Spy::transactionHook(); }
+    void beginTransaction(SPISettings settings) { assert(Spy::busLocked && Spy::activeCs == -1); assert(settings.order == MSBFIRST); Spy::transactionMode = settings.mode; Spy::transactionHz = settings.hz; Spy::transaction = true; Spy::event("transaction", settings.mode, settings.hz); if (Spy::transactionHook) Spy::transactionHook(); }
     void endTransaction() { assert(Spy::busLocked && Spy::activeCs == -1); Spy::event("endTransaction"); Spy::transaction = false; }
     uint8_t transfer(uint8_t value) {
         assert(Spy::transaction && Spy::busLocked && Spy::activeCs >= 0);

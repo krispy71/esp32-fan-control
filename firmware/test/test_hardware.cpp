@@ -111,6 +111,26 @@ static void max56() {
     Spy::now += 501; // Even missed upkeep cannot indefinitely preserve healthy data.
     assert(sensor.readTemperature(Domain::SensorRole::Food1).fault == Domain::SensorFault::Stale);
 }
+static void max56ConfigurationFailure() {
+    for (int bad_register : {0, 1}) {
+        Max31856Device device;
+        if (bad_register == 0) device.pit.cr0Readback = 0;
+        else device.pit.cr1Readback = 0; // B type instead of requested K type.
+        Adapters::Hardware::SharedSpiBus bus; assert(bus.begin());
+        Adapters::Sensors::MAX31856SensorAdapter sensor(bus);
+        Adapters::Actuators::ESP32PWMBlowerAdapter blower;
+        Adapters::Actuators::ESP32ServoDamperAdapter damper;
+        Services::SmokerControlService control(sensor, damper, blower);
+        Spy::now = 0; Spy::clear();
+        blower.begin(); control.initialize(); damper.begin(); sensor.begin();
+        assert(sensor.readTemperature(Domain::SensorRole::Pit).fault == Domain::SensorFault::Disconnected);
+        Spy::now = 1000; sensor.update();
+        const auto state = control.executeCycle(1000);
+        assert(!state.is_pit_valid && state.demand_pct == 0);
+        assert(Spy::duty.at(0) == 0 && state.damper_position_pct == 0);
+        assert(Spy::duty.at(2) == 1000ULL * 65535 / 20000);
+    }
+}
 static void persistenceAndServiceStartup() {
     Adapters::Storage::ESP32NVSConfigAdapter storage;
     Domain::SmokerConfig cfg;
@@ -161,6 +181,6 @@ static void boundedChannel() {
     writer.join();
 }
 int main() {
-    actuatorStartupAndIdle(); spiFramesAndFaults(); max56(); persistenceAndServiceStartup(); boundedChannel();
+    actuatorStartupAndIdle(); spiFramesAndFaults(); max56(); max56ConfigurationFailure(); persistenceAndServiceStartup(); boundedChannel();
     std::cout << "Arduino hardware spies: all scenarios passed\n";
 }
