@@ -180,7 +180,146 @@ static void boundedChannel() {
     for (int i=0; i<10000; ++i) { if (channel.snapshot(state)) assert(state.config.setpoint_f == static_cast<float>(state.last_command_id)); }
     writer.join();
 }
+
+struct RevisionSensor : Services::Ports::ITemperatureSensorPort {
+    Domain::TemperatureReading readTemperature(Domain::SensorRole role) override {
+        return Domain::TemperatureReading::fromFahrenheit(190, role, 0);
+    }
+};
+struct RevisionRuntime {
+    RevisionSensor sensor;
+    Adapters::Actuators::ESP32PWMBlowerAdapter blower;
+    Adapters::Actuators::ESP32ServoDamperAdapter damper;
+    Adapters::Runtime::BoundedControlChannel channel;
+    Services::SmokerControlService service;
+    explicit RevisionRuntime(Services::Ports::IConfigStoragePort& storage)
+        : service(sensor, damper, blower, nullptr, 225, Domain::ActuatorCoordinator{},
+                  Domain::PIDConfig{}, &storage, &channel) {
+        blower.begin(); service.initialize(); damper.begin();
+    }
+    Domain::ControlState state() const {
+        Domain::ControlState out; assert(channel.snapshot(out)); return out;
+    }
+    Domain::ControlState submit(uint32_t version, uint16_t minimum) {
+        Domain::ControlCommand command;
+        command.kind = Domain::ControlCommandKind::UpdateConfig;
+        command.config = service.config();
+        command.config.servo_min_pulse_us = minimum;
+        command.expected_config_version = version;
+        command.require_config_version = true;
+        command.request_id = 1;
+        assert(channel.submit(command));
+        service.executeCycle(1000);
+        return state();
+    }
+};
+static void durableConfigurationRevisions() {
+    for (bool fail_latest : {false, true}) {
+        Adapters::Storage::ESP32NVSConfigAdapter storage(fail_latest ? "rev-fail" : "rev-ok");
+        RevisionRuntime first(storage);
+        const auto original = first.state();
+        assert(original.config_version == 0);
+        auto applied = first.submit(original.config_version, 700);
+        assert(applied.last_command_accepted);
+        Spy::nvsWriteFailure = fail_latest;
+        auto latest = first.submit(applied.config_version, 800);
+        assert(latest.last_command_accepted && latest.config.servo_min_pulse_us == 800);
+        assert(latest.persistence == (fail_latest ? Domain::PersistenceStatus::Failed : Domain::PersistenceStatus::Saved));
+        Spy::nvsWriteFailure = false;
+        Adapters::Storage::ESP32NVSConfigAdapter fresh_storage(fail_latest ? "rev-fail" : "rev-ok");
+        RevisionRuntime restarted(fresh_storage);
+        assert(restarted.state().config_version > latest.config_version);
+        assert(restarted.state().config.servo_min_pulse_us == (fail_latest ? 700 : 800));
+        for (auto stale_version : {original.config_version, latest.config_version}) {
+            assert(!restarted.submit(stale_version, 1000).last_command_accepted);
+            Domain::SmokerConfig persisted;
+            assert(fresh_storage.loadConfig(persisted));
+            assert(persisted.servo_min_pulse_us == (fail_latest ? 700 : 800));
+        }
+        assert(restarted.submit(restarted.state().config_version, 900).last_command_accepted);
+    }
+    Adapters::Storage::ESP32NVSConfigAdapter storage("rev-retry");
+    Domain::SmokerConfig cfg; cfg.next_config_version = 1024; cfg.servo_min_pulse_us = 700;
+    assert(storage.saveConfig(cfg));
+    Spy::nvsWriteFailure = true;
+    RevisionRuntime blocked(storage);
+    assert(blocked.state().persistence == Domain::PersistenceStatus::Failed);
+    auto rejected = blocked.submit(blocked.state().config_version, 800);
+    assert(!rejected.last_command_accepted && rejected.config.servo_min_pulse_us == 700);
+    assert(rejected.persistence == Domain::PersistenceStatus::Failed);
+    assert(std::strcmp(rejected.telemetry.status, "REGULATING") == 0);
+    Spy::nvsWriteFailure = false;
+    assert(blocked.submit(rejected.config_version, 800).last_command_accepted);
+    assert(storage.loadConfig(cfg) && cfg.next_config_version > blocked.state().config_version);
+
+    Adapters::Storage::ESP32NVSConfigAdapter exhausted("rev-exhausted");
+    cfg.next_config_version = UINT32_MAX - 1;
+    assert(exhausted.saveConfig(cfg));
+    RevisionRuntime terminal(exhausted);
+    rejected = terminal.submit(terminal.state().config_version, 900);
+    assert(!rejected.last_command_accepted && rejected.persistence == Domain::PersistenceStatus::Failed);
+    assert(rejected.config_version == UINT32_MAX - 1 && rejected.config.servo_min_pulse_us == 800);
+
+    Adapters::Storage::ESP32NVSConfigAdapter blocks("rev-blocks");
+    RevisionRuntime many(blocks);
+    for (size_t n = 0; n < 1024; ++n) {
+        const auto result = many.submit(many.state().config_version, n % 2 ? 700 : 800);
+        assert(result.last_command_accepted);
+    }
+    assert(blocks.loadConfig(cfg) && cfg.next_config_version > many.state().config_version);
+    RevisionRuntime next(blocks);
+    assert(next.state().config_version > many.state().config_version);
+}
+static void revisionReadFailurePreservesCalibration() {
+    Adapters::Storage::ESP32NVSConfigAdapter storage("rev-unread");
+    Domain::SmokerConfig cfg; cfg.servo_min_pulse_us = 700; cfg.next_config_version = 4096;
+    assert(storage.saveConfig(cfg));
+    const auto previous = Spy::nvs.at("rev-unreadconfig_v2");
+    Spy::nvsReadFailure = true;
+    RevisionRuntime unread(storage);
+    assert(unread.state().persistence == Domain::PersistenceStatus::Failed);
+    assert(!unread.submit(unread.state().config_version, 900).last_command_accepted);
+    assert(Spy::nvs.at("rev-unreadconfig_v2") == previous);
+    Spy::nvsReadFailure = false;
+    Adapters::Storage::ESP32NVSConfigAdapter fresh("rev-unread");
+    RevisionRuntime recovered(fresh);
+    assert(recovered.state().config.servo_min_pulse_us == 700);
+    assert(recovered.state().config_version == 4096);
+}
+static void legacyRevisionMigration() {
+    // Fixed legacy on-flash representation, independent of the new adapter type.
+    struct LegacyV1 {
+        uint32_t version{1};
+        float setpoint{275}, kp{4}, ki{0.04f}, kd{12}, threshold{45}, lid_drop{20};
+        uint32_t lid_ms{120000};
+        uint16_t min_us{750}, max_us{2250};
+        uint8_t inverted{1}, mode{2};
+        char token[96]{"old-token"};
+        char mac[18]{"00:11:22:33:44:55"};
+    };
+    static_assert(sizeof(LegacyV1) == 152);
+    LegacyV1 legacy;
+    Preferences prefs; assert(prefs.begin("rev-old", false));
+    assert(prefs.putBytes("config_v1", &legacy, sizeof(legacy)) == sizeof(legacy)); prefs.end();
+    Adapters::Storage::ESP32NVSConfigAdapter storage("rev-old");
+    Domain::SmokerConfig cfg; assert(storage.loadConfig(cfg));
+    assert(cfg.next_config_version == 0);
+    RevisionRuntime migrated(storage);
+    assert(storage.loadConfig(cfg) && cfg.next_config_version == 1024);
+    assert(cfg.setpoint_f == 275 && cfg.servo_min_pulse_us == 750 && cfg.servo_max_pulse_us == 2250);
+    assert(cfg.servo_inverted && cfg.pid_kp == 4 && cfg.pid_ki == 0.04f && cfg.pid_kd == 12);
+    assert(cfg.airflow_threshold_pct == 45 && cfg.lid_drop_threshold_deg == 20 && cfg.lid_pause_duration_ms == 120000);
+    assert(cfg.meat_probe_mode == Domain::MeatProbeMode::MeaterBleDirect);
+    assert(std::strcmp(cfg.meater_cloud_token, "old-token") == 0);
+    assert(std::strcmp(cfg.meater_mac_filter, "00:11:22:33:44:55") == 0);
+    assert(Spy::nvs.count("rev-oldconfig_v2") == 1);
+    RevisionRuntime reboot(storage);
+    assert(reboot.state().config_version > migrated.state().config_version);
+    assert(!reboot.submit(migrated.state().config_version, 1000).last_command_accepted);
+}
+
 int main() {
     actuatorStartupAndIdle(); spiFramesAndFaults(); max56(); max56ConfigurationFailure(); persistenceAndServiceStartup(); boundedChannel();
+    durableConfigurationRevisions(); revisionReadFailurePreservesCalibration(); legacyRevisionMigration();
     std::cout << "Arduino hardware spies: all scenarios passed\n";
 }

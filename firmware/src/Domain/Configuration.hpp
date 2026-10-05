@@ -38,6 +38,9 @@ struct SmokerConfig {
     uint16_t servo_max_pulse_us{2000};
     bool servo_inverted{false};
 
+    // Exclusive durable high-water mark for configuration concurrency revisions.
+    uint32_t next_config_version{0};
+
     [[nodiscard]] DamperCalibration damperCalibration() const noexcept {
         return {servo_min_pulse_us, servo_max_pulse_us, servo_inverted};
     }

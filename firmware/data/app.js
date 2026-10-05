@@ -426,7 +426,9 @@
         const result = await api(`/api/command?id=${queued.request_id}`);
         if (result.status === 'queued') continue;
         latestConfigVersion = result.config_version;
-        if (result.status !== 'applied') throw new Error('Configuration changed. Reload settings and try again.');
+        if (result.status !== 'applied') throw new Error(result.persistence === 'failed' ?
+          'Settings were not applied because storage could not reserve a revision. Restore storage and retry, or restart the controller.' :
+          'Configuration changed. Reload settings and try again.');
         if (path === '/api/config') formConfigVersion = result.config_version;
         if (path !== '/api/lid-pause' && result.persistence === 'failed') {
           throw new Error('Applied, but could not save. Changes will be lost after restart. Try saving again.');

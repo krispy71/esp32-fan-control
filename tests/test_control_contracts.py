@@ -119,8 +119,9 @@ def test_storage_loading_occurs_only_in_explicit_idempotent_initialization():
     assert service.execute_cycle(0).demand_pct == 0 and sensor.calls == 0
     actuators.events.clear()
     service.initialize()
-    assert storage.loads == 1 and storage.saves == 0
-    assert service.config == config and actuators.calibration == config.damper_calibration
+    assert storage.loads == 1 and storage.saves == 1
+    assert service.config == replace(config, next_config_version=1024)
+    assert actuators.calibration == config.damper_calibration
     assert actuators.events == ["off", "configure", "close"]
     service.initialize()
     assert storage.loads == 1 and len(actuators.events) == 3
@@ -180,12 +181,12 @@ def test_setpoint_keeps_entire_configuration_and_does_not_cancel_pause():
     service.initialize()
     service.trigger_lid_pause(0)
     service.setpoint_f = 250
-    assert service.config == replace(config, setpoint_f=250)
+    assert service.config == replace(config, setpoint_f=250, next_config_version=1024)
     assert storage.config == service.config
     assert service.execute_cycle(1).lid_open
     _, restarted_actuators, restarted = setup_control(config_storage=storage)
     restarted.initialize()
-    assert restarted.config == service.config
+    assert restarted.config == replace(service.config, next_config_version=2048)
     assert restarted_actuators.calibration == config.damper_calibration
 
 

@@ -13,14 +13,29 @@ public:
     bool loadConfig(Domain::SmokerConfig& out) override {
 #ifdef ARDUINO
         Preferences prefs;
-        if (!prefs.begin(namespace_, true)) return false;
+        // Open/create the namespace so a genuinely missing record is distinct
+        // from a read failure. Never overwrite unread calibration during reserve.
+        write_blocked_ = true;
+        if (!prefs.begin(namespace_, false)) return false;
         Domain::SmokerConfig cfg;
-        if (prefs.isKey("config_v1")) {
+        if (prefs.isKey("config_v2") || prefs.isKey("config_v1")) {
             Record record{};
-            const bool ok = prefs.getBytesLength("config_v1") == sizeof(record) &&
-                prefs.getBytes("config_v1", &record, sizeof(record)) == sizeof(record);
+            bool ok = false;
+            if (prefs.isKey("config_v2")) {
+                RecordV2 stored{};
+                ok = prefs.getBytesLength("config_v2") == sizeof(stored) &&
+                    prefs.getBytes("config_v2", &stored, sizeof(stored)) == sizeof(stored) &&
+                    stored.config.version == 2;
+                record = stored.config;
+                cfg.next_config_version = stored.next_config_version;
+            } else {
+                // V1 records predate durable concurrency revision reservations.
+                ok = prefs.getBytesLength("config_v1") == sizeof(record) &&
+                    prefs.getBytes("config_v1", &record, sizeof(record)) == sizeof(record) &&
+                    record.version == 1;
+            }
             prefs.end();
-            if (!ok || record.version != 1 || record.inverted > 1) return false;
+            if (!ok || record.inverted > 1) return false;
             cfg.setpoint_f = record.setpoint;
             cfg.pid_kp = record.kp; cfg.pid_ki = record.ki; cfg.pid_kd = record.kd;
             cfg.airflow_threshold_pct = record.threshold;
@@ -33,7 +48,7 @@ public:
             std::memcpy(cfg.meater_mac_filter, record.mac, sizeof(record.mac));
         } else {
             // Migrate older scalar records; absent namespaces are not successful loads.
-            if (!prefs.isKey("setpoint")) { prefs.end(); return false; }
+            if (!prefs.isKey("setpoint")) { prefs.end(); write_blocked_ = false; return false; }
             cfg.setpoint_f = prefs.getFloat("setpoint", cfg.setpoint_f);
             cfg.pid_kp = prefs.getFloat("kp", cfg.pid_kp);
             cfg.pid_ki = prefs.getFloat("ki", cfg.pid_ki);
@@ -45,6 +60,7 @@ public:
         }
         if (!cfg.isValid()) return false;
         out = cfg;
+        write_blocked_ = false;
         return true;
 #else
         if (!mock_has_data_ || !mock_config_.isValid()) return false;
@@ -53,10 +69,10 @@ public:
 #endif
     }
     bool saveConfig(const Domain::SmokerConfig& cfg) override {
-        if (!cfg.isValid()) return false;
+        if (write_blocked_ || !cfg.isValid()) return false;
 #ifdef ARDUINO
         Record record{};
-        record.version = 1;
+        record.version = 2;
         record.setpoint = cfg.setpoint_f;
         record.kp = cfg.pid_kp; record.ki = cfg.pid_ki; record.kd = cfg.pid_kd;
         record.threshold = cfg.airflow_threshold_pct;
@@ -69,7 +85,8 @@ public:
         Preferences prefs;
         if (!prefs.begin(namespace_, false)) return false;
         // One versioned NVS blob prevents partially updated multi-key configurations.
-        const bool saved = prefs.putBytes("config_v1", &record, sizeof(record)) == sizeof(record);
+        const RecordV2 stored{record, cfg.next_config_version};
+        const bool saved = prefs.putBytes("config_v2", &stored, sizeof(stored)) == sizeof(stored);
         prefs.end();
         return saved;
 #else
@@ -88,7 +105,13 @@ private:
         char mac[18];
     };
     static_assert(sizeof(Record) == 152, "NVS v1 layout changed: require migration");
+    struct RecordV2 {
+        Record config;
+        uint32_t next_config_version;
+    };
+    static_assert(sizeof(RecordV2) == 156, "NVS v2 layout changed: require migration");
     const char* namespace_;
+    bool write_blocked_{false};
 #ifndef ARDUINO
     Domain::SmokerConfig mock_config_{};
     bool mock_has_data_{false};

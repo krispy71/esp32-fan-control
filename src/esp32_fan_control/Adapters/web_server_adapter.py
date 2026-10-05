@@ -162,6 +162,7 @@ class WebServerAdapter:
     def _config(self):
         state = self._state()
         data = asdict(state.config)
+        data.pop("next_config_version")
         data["meater_cloud_token_configured"] = bool(data.pop("meater_cloud_token"))
         data["meat_probe_mode"] = _MODES.index(state.config.meat_probe_mode)
         data["config_version"] = state.config_version

@@ -47,11 +47,16 @@ class SmokerConfig:
     servo_max_pulse_us: int = 2000
     servo_inverted: bool = False
 
+    # Exclusive durable high-water mark, never accepted from web configuration.
+    next_config_version: int = 0
+
     @property
     def damper_calibration(self) -> DamperCalibration:
         return DamperCalibration(self.servo_min_pulse_us, self.servo_max_pulse_us, self.servo_inverted)
 
     def __post_init__(self) -> None:
+        if type(self.next_config_version) is not int or not 0 <= self.next_config_version <= 0xFFFFFFFF:
+            raise ValueError("Configuration revision reservation is outside uint32 capacity")
         _ = self.damper_calibration  # Validate at the configuration boundary.
         if not isinstance(self.meat_probe_mode, MeatProbeMode):
             raise TypeError("Unknown meat probe mode")

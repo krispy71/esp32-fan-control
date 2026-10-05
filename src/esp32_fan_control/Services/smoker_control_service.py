@@ -70,6 +70,7 @@ class SmokerControlService:
         self._last_command_id = 0
         self._last_command_accepted = False
         self._config_version = 0
+        self._revisions_reserved = False
 
     def initialize(self) -> None:
         """Load persisted settings, configure safe closure, and publish initial state."""
@@ -77,11 +78,13 @@ class SmokerControlService:
             return
         self._blower.set_speed(0.0)
         if self._config_storage is not None:
-            if not self._explicit_config:
-                loaded = self._config_storage.load_config()
-                if loaded is not None:
-                    self._config = loaded
+            loaded = self._config_storage.load_config()
+            if loaded is not None:
+                self._config = (replace(self._config, next_config_version=loaded.next_config_version)
+                    if self._explicit_config else loaded)
             self._persistence = PersistenceStatus.UNCHANGED
+        self._config_version = self._config.next_config_version
+        self._reserve_versions()
         self._apply_configuration()
         self._damper.configure(self._config.damper_calibration)
         self._damper.set_position(0.0)
@@ -104,12 +107,34 @@ class SmokerControlService:
             pause_duration_s=self._config.lid_pause_duration_s,
         ))
 
+    def _reserve_versions(self) -> bool:
+        # One durable block per boot; skipped numbers prevent reuse after an
+        # ordinary configuration save fails but its in-memory change is applied.
+        if self._config_version >= 0xFFFFFFFE:
+            self._persistence = PersistenceStatus.FAILED
+            return False
+        reserved = replace(self._config,
+            next_config_version=min(self._config_version + 1024, 0xFFFFFFFF))
+        if self._config_storage is not None and not self._config_storage.save_config(reserved):
+            self._persistence = PersistenceStatus.FAILED
+            return False
+        self._config = reserved
+        self._revisions_reserved = True
+        if self._config_storage is not None:
+            self._persistence = PersistenceStatus.UNCHANGED
+        return True
+
     def update_config(self, new_config: SmokerConfig) -> bool:
         """Apply a complete validated config and report persistence separately."""
         if not self._initialized:
             return False
+        if (self._config_version == 0xFFFFFFFF or
+                ((not self._revisions_reserved or
+                  self._config_version + 1 >= self._config.next_config_version)
+                 and not self._reserve_versions())):
+            return False
         old_calibration = self._config.damper_calibration
-        self._config = new_config
+        self._config = replace(new_config, next_config_version=self._config.next_config_version)
         self._apply_configuration()
         if old_calibration != new_config.damper_calibration:
             self._blower.set_speed(0.0)
@@ -119,7 +144,7 @@ class SmokerControlService:
         self._config_version += 1
         if self._config_storage is not None:
             self._persistence = (PersistenceStatus.SAVED
-                if self._config_storage.save_config(new_config) else PersistenceStatus.FAILED)
+                if self._config_storage.save_config(self._config) else PersistenceStatus.FAILED)
         return True
 
     @property

@@ -86,7 +86,7 @@ static void startupAndConfiguration() {
     assert(preinit.demand_pct == 0 && sensor.calls == 0);
     actuators.events.clear();
     service.initialize();
-    assert(storage.loads == 1 && storage.writes == 0);
+    assert(storage.loads == 1 && storage.writes == 1);
     assert(service.setpoint() == 265 && actuators.calibration.inverted);
     assert(actuators.calibration.min_pulse_us == 800 && actuators.calibration.max_pulse_us == 2200);
     assert((actuators.events == std::vector<std::string>{"off", "configure", "close"}));
@@ -94,7 +94,7 @@ static void startupAndConfiguration() {
     assert(storage.loads == 1 && actuators.events.size() == 3);
     assert(!service.setSetpoint(99));
     assert(!service.setSetpoint(std::numeric_limits<float>::quiet_NaN()));
-    assert(storage.writes == 0 && service.setpoint() == 265);
+    assert(storage.writes == 1 && service.setpoint() == 265);
     assert(service.setSetpoint(280));
     assert(storage.saved.servo_inverted && storage.saved.meat_probe_mode == Domain::MeatProbeMode::WiredOnly);
     assert(std::strcmp(storage.saved.meater_cloud_token, "test-placeholder") == 0);

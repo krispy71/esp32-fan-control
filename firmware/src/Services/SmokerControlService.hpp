@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstring>
+#include <algorithm>
 #include "../Domain/Airflow.hpp"
 #include "../Domain/Configuration.hpp"
 #include "../Domain/LidDetector.hpp"
@@ -52,6 +53,8 @@ public:
             if (storage_->loadConfig(loaded) && loaded.isValid()) config_ = loaded;
             persistence_ = Domain::PersistenceStatus::Unchanged;
         }
+        config_version_ = config_.next_config_version;
+        reserveVersions();
         applyConfiguration();
         damper_.configure(config_.damperCalibration());
         damper_.setPosition(0.0f);
@@ -65,8 +68,16 @@ public:
 
     bool updateConfig(const Domain::SmokerConfig& new_cfg) noexcept {
         if (!initialized_ || !new_cfg.isValid()) return false;
+        // Never expose a revision which was not reserved durably. A failed
+        // ordinary save can still apply in memory, without reusing its revision
+        // for another configuration on the next boot.
+        if (config_version_ == UINT32_MAX ||
+            ((!revisions_reserved_ || config_version_ + 1 >= config_.next_config_version) &&
+             !reserveVersions())) return false;
         const auto old_calibration = config_.damperCalibration();
+        const uint32_t reservation = config_.next_config_version;
         config_ = new_cfg;
+        config_.next_config_version = reservation;
         applyConfiguration();
         const auto calibration = config_.damperCalibration();
         if (old_calibration.min_pulse_us != calibration.min_pulse_us ||
@@ -173,6 +184,24 @@ private:
         snapshot.damper_position_pct = snapshot.blower_speed_pct = snapshot.demand_pct = 0.0f;
         std::strcpy(snapshot.status, "FAULT: SENSOR_INVALID");
     }
+    bool reserveVersions() noexcept {
+        constexpr uint32_t block_size = 1024;
+        if (config_version_ >= UINT32_MAX - 1) {
+            persistence_ = Domain::PersistenceStatus::Failed;
+            return false;
+        }
+        auto reserved = config_;
+        reserved.next_config_version = config_version_ +
+            std::min(block_size, UINT32_MAX - config_version_);
+        if (storage_ && !storage_->saveConfig(reserved)) {
+            persistence_ = Domain::PersistenceStatus::Failed;
+            return false;
+        }
+        config_ = reserved;
+        revisions_reserved_ = true;
+        if (storage_) persistence_ = Domain::PersistenceStatus::Unchanged;
+        return true;
+    }
     void applyConfiguration() noexcept {
         pid_.setSetpoint(config_.setpoint_f);
         auto tuning = pid_.config();
@@ -241,6 +270,7 @@ private:
     uint32_t last_command_id_{0};
     bool last_command_accepted_{false};
     uint32_t config_version_{0};
+    bool revisions_reserved_{false};
 };
 
 } // namespace SmokerController::Services

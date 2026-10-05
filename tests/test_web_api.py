@@ -259,6 +259,7 @@ def test_setpoint_queued_applied_acknowledged_and_persisted(controller):
 
 def test_lid_pause_and_resume_apply_at_owner_with_actuator_effects(controller):
     before = controller.channel.snapshot()
+    stored_before = controller.storage.path.read_bytes()
     assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
     for action in ("pause", "resume"):
         pause = action == "pause"
@@ -294,7 +295,7 @@ def test_lid_pause_and_resume_apply_at_owner_with_actuator_effects(controller):
             assert telemetry["demand_pct"] > 0
             assert controller.actuator.damper_pct > 0 and controller.actuator.blower_pct > 0
         assert controller.service.config == before.config
-        assert not controller.storage.path.exists()  # Transient lid controls are not saved.
+        assert controller.storage.path.read_bytes() == stored_before  # Lid controls do not save changes.
 
 
 def test_stale_updates_rejected_in_http_and_at_owner(controller):
@@ -332,8 +333,11 @@ def test_cloud_token_write_only_and_preserved(controller):
 
 def test_storage_failure_is_reported_without_claiming_saved(tmp_path, access):
     class FailedStorage:
+        writes = 0
         def load_config(self): return None
-        def save_config(self, config): return False
+        def save_config(self, config):
+            self.writes += 1
+            return self.writes == 1  # Reserve at startup; fail the configuration save.
     app = RunningController(tmp_path, access, FailedStorage())
     try:
         status, raw, _ = app.mutation({"servo_min_pulse_us": 900})
